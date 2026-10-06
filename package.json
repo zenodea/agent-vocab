@@ -1,0 +1,14 @@
+{
+  "name": "pi-vocab",
+  "version": "0.1.0",
+  "description": "Numbered jargon hints in pi replies, with a one-key glossary overlay",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./src/vocab.ts"]
+  },
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
