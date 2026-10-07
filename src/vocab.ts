@@ -90,15 +90,19 @@ export default function (pi: ExtensionAPI) {
 		const msg = event.message;
 		if (msg.role !== "assistant") return;
 		let changed = false;
+		// Every known term is a candidate, so a repeat from an earlier reply is
+		// numbered even when the model forgot to mark it.
+		const candidates = glossary.all().map((e) => ({ term: e.term, definition: e.definition || undefined }));
 		const content = msg.content.map((block) => {
-			if (block.type !== "text" || !block.text.includes("[[")) return block;
-			const result = rewrite(block.text, hints.length + 1, known);
+			if (block.type !== "text" || !block.text.trim()) return block;
+			const result = rewrite(block.text, hints.length + 1, known, candidates);
 			if (result.text === block.text) return block;
 			changed = true;
 			for (const h of result.hints) {
 				hints.push(h);
 				const entry = glossary.record(h.term, h.definition, ctx.cwd);
 				if (!h.definition) h.definition = entry.definition || undefined;
+				candidates.push({ term: entry.term, definition: entry.definition || undefined });
 			}
 			return { ...block, text: result.text };
 		});
