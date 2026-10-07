@@ -12,28 +12,34 @@
  * The model writes [[term|definition]] or [[kind: name|definition]] for a
  * concept, why, where, how or gotcha. While the reply streams, the text shown
  * on screen is rewritten to **name**¹ as soon as each marker is complete; at
- * message_end the stored message is rewritten the same way and definitions go
- * to ~/.pi/agent/vocab.json. Numbers are per session: closure stays ¹² until
- * you start a new session. Terms and concepts are global; the other kinds only
- * show inside the project they came from.
+ * message_end the stored message is rewritten the same way. The glossary lives
+ * inside the pi session as a custom entry, so it follows the session and its
+ * branches, and a new session starts empty. Numbers are per session too:
+ * closure stays ¹² until you start a new session. Only the on/off flag is
+ * global, in ~/.pi/agent/vocab.json.
  */
 
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { Glossary } from "./glossary.ts";
+import { Glossary, type GlossaryData } from "./glossary.ts";
 import { type Hint, type KnownTerm, normalizeTerm, recoverHints, rewrite } from "./markers.ts";
 import { KIND_LABEL, type OverlayResult, VocabOverlay } from "./overlay.ts";
 import { PROMPT_SECTION } from "./prompt.ts";
 import { pickCards, QuizOverlay, type QuizResult } from "./quiz.ts";
+import { Settings } from "./settings.ts";
 
-// PI_VOCAB_FILE overrides the location, mostly for tests.
-const GLOSSARY_FILE = process.env.PI_VOCAB_FILE || join(getAgentDir(), "vocab.json");
+// PI_VOCAB_FILE overrides the location of the on/off flag, mostly for tests.
+const SETTINGS_FILE = process.env.PI_VOCAB_FILE || join(getAgentDir(), "vocab.json");
+/** customType of the session entry that holds the glossary snapshot. */
+const ENTRY_TYPE = "vocab";
 
 type TextBlock = { type: "text"; text: string };
 const isText = (c: { type: string }): c is TextBlock => c.type === "text";
 
 export default function (pi: ExtensionAPI) {
-	const glossary = new Glossary(GLOSSARY_FILE);
+	const settings = new Settings(SETTINGS_FILE);
+	// Each save appends a fresh snapshot to the session; session_start reads the last one back.
+	const glossary = new Glossary((data) => pi.appendEntry<GlossaryData>(ENTRY_TYPE, data));
 
 	/** Every hint of this session, keyed by normalized name. Numbers never change. */
 	let known = new Map<string, Hint>();
@@ -49,7 +55,7 @@ export default function (pi: ExtensionAPI) {
 
 	const showStatus = (ctx: ExtensionContext) => {
 		if (!ctx.hasUI) return;
-		if (!glossary.enabled) {
+		if (!settings.enabled) {
 			ctx.ui.setStatus("vocab", ctx.ui.theme.fg("dim", "vocab off"));
 			return;
 		}
@@ -57,13 +63,13 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus("vocab", n > 0 ? ctx.ui.theme.fg("accent", `vocab ${n}`) : undefined);
 	};
 
-	const candidates = (ctx: ExtensionContext): KnownTerm[] =>
-		glossary.all(ctx.cwd).map((e) => ({ kind: e.kind, term: e.term, definition: e.definition || undefined }));
+	const candidates = (): KnownTerm[] =>
+		glossary.all().map((e) => ({ kind: e.kind, term: e.term, definition: e.definition || undefined }));
 
 	/** Rewrite the text blocks of an assistant message. Returns undefined when nothing changed. */
 	const rewriteBlocks = (content: readonly { type: string }[], ctx: ExtensionContext, streaming: boolean) => {
 		let changed = false;
-		const cands = candidates(ctx);
+		const cands = candidates();
 		const out = content.map((block) => {
 			if (!isText(block) || !block.text.trim()) return block;
 			const result = rewrite(block.text, 1, known, cands, { streaming });
@@ -82,7 +88,7 @@ export default function (pi: ExtensionAPI) {
 		try {
 			result = await ctx.ui.custom<OverlayResult>(
 				(_tui, theme, _keys, done) =>
-					new VocabOverlay(theme, { hints: hints(), glossary: glossary.all(ctx.cwd), initialQuery, width: 72 }, done),
+					new VocabOverlay(theme, { hints: hints(), glossary: glossary.all(), initialQuery, width: 72 }, done),
 				{ overlay: true, overlayOptions: { width: "80%", maxHeight: "80%", anchor: "center", minWidth: 40 } },
 			);
 		} finally {
@@ -105,7 +111,7 @@ export default function (pi: ExtensionAPI) {
 	/** Five flashcards from the entries most likely to have slipped. */
 	const runQuiz = async (ctx: ExtensionContext, n: number) => {
 		if (!ctx.hasUI || overlayOpen) return;
-		const cards = pickCards(glossary.all(ctx.cwd), n);
+		const cards = pickCards(glossary.all(), n);
 		overlayOpen = true;
 		let result: QuizResult | undefined;
 		try {
@@ -121,10 +127,14 @@ export default function (pi: ExtensionAPI) {
 		glossary.save();
 	};
 
-	// On resume, read every number back out of the branch so they stay stable.
+	// On resume, load the last glossary snapshot on this branch, then read every
+	// number back out of the replies so they stay stable.
 	pi.on("session_start", async (_event, ctx) => {
 		resetSession();
-		for (const entry of ctx.sessionManager.getBranch()) {
+		const branch = ctx.sessionManager.getBranch();
+		const last = [...branch].reverse().find((e) => e.type === "custom" && e.customType === ENTRY_TYPE);
+		glossary.load(last && last.type === "custom" ? last.data : undefined);
+		for (const entry of branch) {
 			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 			const text = entry.message.content.filter(isText).map((c) => c.text).join("\n");
 			for (const h of recoverHints(text)) {
@@ -139,7 +149,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("before_agent_start", async (event) => {
-		if (glossary.enabled) event.systemPromptOptions.sections.vocab = PROMPT_SECTION;
+		if (settings.enabled) event.systemPromptOptions.sections.vocab = PROMPT_SECTION;
 		else delete event.systemPromptOptions.sections.vocab;
 	});
 
@@ -191,8 +201,8 @@ export default function (pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const [sub, ...rest] = args.trim().split(/\s+/).filter(Boolean);
 			if (sub === "toggle" || sub === "on" || sub === "off") {
-				const next = sub === "toggle" ? !glossary.enabled : sub === "on";
-				glossary.setEnabled(next);
+				const next = sub === "toggle" ? !settings.enabled : sub === "on";
+				settings.setEnabled(next);
 				showStatus(ctx);
 				ctx.ui.notify(next ? "vocab on: new terms get marked from your next message" : "vocab off: no more marking", "info");
 				return;
@@ -209,7 +219,7 @@ export default function (pi: ExtensionAPI) {
 				const n = Number.parseInt(rest[0] ?? "", 10);
 				return runQuiz(ctx, Number.isFinite(n) && n > 0 ? Math.min(n, 20) : 5);
 			}
-			if (sub === "count") return ctx.ui.notify(`${glossary.size} terms in ${GLOSSARY_FILE}`, "info");
+			if (sub === "count") return ctx.ui.notify(`${glossary.size} terms in this session`, "info");
 			await openOverlay(ctx, sub ? [sub, ...rest].join(" ") : undefined);
 		},
 	});

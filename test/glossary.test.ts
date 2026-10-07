@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
-import { Glossary, normalize } from "../src/glossary.ts";
+import { Glossary, type GlossaryData, normalize } from "../src/glossary.ts";
 
-const fresh = () => new Glossary(join(mkdtempSync(join(tmpdir(), "vocab-")), "vocab.json"));
+const fresh = () => new Glossary();
+
+/** A glossary wired to a fake store, plus a way to reopen it from that store. */
+const stored = () => {
+	const store: { last?: GlossaryData } = {};
+	const g = new Glossary((d) => (store.last = d));
+	const reopen = () => {
+		const again = new Glossary();
+		again.load(store.last);
+		return again;
+	};
+	return { g, reopen, store };
+};
 
 test("normalize folds case and whitespace", () => {
 	assert.equal(normalize("  Dependency   Injection "), "dependency injection");
@@ -31,16 +40,12 @@ test("first definition sticks, missing one gets filled", () => {
 	assert.equal(g.get("scope")?.definition, "where a name is visible");
 });
 
-test("save round-trips through disk and keeps enabled flag", () => {
-	const dir = mkdtempSync(join(tmpdir(), "vocab-"));
-	const path = join(dir, "vocab.json");
-	const g = new Glossary(path);
+test("save snapshots and load restores", () => {
+	const { g, reopen, store } = stored();
 	g.record("Mutex", "a lock so only one thing touches shared data at a time", "/p");
-	g.setEnabled(false);
-	const again = new Glossary(path);
-	assert.equal(again.enabled, false);
-	assert.equal(again.get("MUTEX")?.definition, "a lock so only one thing touches shared data at a time");
-	assert.ok(readFileSync(path, "utf8").includes('"version": 2'));
+	g.save();
+	assert.equal(store.last?.version, 3);
+	assert.equal(reopen().get("MUTEX")?.definition, "a lock so only one thing touches shared data at a time");
 });
 
 test("forget removes and reports", () => {
@@ -59,26 +64,23 @@ test("all sorts most recent first", () => {
 	assert.deepEqual(g.all().map((e) => e.term), ["B", "C", "A"]);
 });
 
-test("kinds are stored apart and project kinds are scoped", () => {
+test("kinds are stored apart", () => {
 	const g = fresh();
 	g.record("SQLite", "a file database", "/p1");
 	g.record("SQLite", "single-user app", "/p1", "why");
 	g.record("tests", "make test", "/p2", "how");
 	assert.equal(g.get("sqlite")?.kind, "term");
 	assert.equal(g.get("sqlite", "why")?.definition, "single-user app");
-	assert.deepEqual(g.all("/p1").map((e) => e.term).sort(), ["SQLite", "SQLite"]);
-	assert.deepEqual(g.all("/p2").map((e) => e.term).sort(), ["SQLite", "tests"]);
 	assert.equal(g.all().length, 3);
 	assert.equal(g.forget("sqlite"), true);
 	assert.equal(g.all().length, 1);
 });
 
-test("version 1 files load as terms", () => {
-	const dir = mkdtempSync(join(tmpdir(), "vocab-"));
-	const path = join(dir, "vocab.json");
-	writeFileSync(path, JSON.stringify({ version: 1, enabled: true, terms: { closure: { term: "closure", definition: "d", firstSeen: "x", lastSeen: "x", count: 1, projects: [] } } }));
-	const g = new Glossary(path);
+test("older snapshots load as terms", () => {
+	const g = fresh();
+	g.load({ version: 1, terms: { closure: { term: "closure", definition: "d", firstSeen: "x", lastSeen: "x", count: 1, projects: [] } } });
 	assert.equal(g.get("closure")?.kind, "term");
+	assert.equal(g.get("closure")?.lookups, 0);
 });
 
 test("links go both ways and never to self", () => {
@@ -92,13 +94,11 @@ test("links go both ways and never to self", () => {
 });
 
 test("lookups count and survive a save", () => {
-	const dir = mkdtempSync(join(tmpdir(), "vocab-"));
-	const path = join(dir, "vocab.json");
-	const g = new Glossary(path);
+	const { g, reopen } = stored();
 	g.record("Thunk", "a wrapped value that runs later", "/p");
 	assert.equal(g.lookup("thunk"), true);
 	assert.equal(g.lookup("thunk"), true);
 	assert.equal(g.lookup("nope"), false);
 	g.save();
-	assert.equal(new Glossary(path).get("thunk")?.lookups, 2);
+	assert.equal(reopen().get("thunk")?.lookups, 2);
 });

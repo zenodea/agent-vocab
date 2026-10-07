@@ -1,20 +1,12 @@
 /**
- * The glossary: everything the agent has explained, with its plain definition.
- * One JSON file per user, shared across projects, so a term explained once in
- * one repo is still there when it shows up in another.
- *
- * Entries come in kinds. Terms and concepts are universal; why, where, how and
- * gotcha belong to the project they were seen in.
+ * The glossary: everything the agent has explained in this session, with its
+ * plain definition. State lives in memory; whoever owns it decides where it is
+ * persisted (pi-vocab stores a snapshot in the pi session, so it follows the
+ * session and its branches, and a new session starts empty).
  */
-
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 
 export const KINDS = ["term", "concept", "why", "where", "how", "gotcha"] as const;
 export type Kind = (typeof KINDS)[number];
-
-/** Kinds that only make sense inside the project they came from. */
-export const PROJECT_KINDS: ReadonlySet<Kind> = new Set<Kind>(["why", "where", "how", "gotcha"]);
 
 export const isKind = (s: string): s is Kind => (KINDS as readonly string[]).includes(s);
 
@@ -38,10 +30,8 @@ export interface Entry {
 	quiz: { asked: number; missed: number; lastAsked?: string };
 }
 
-export interface GlossaryFile {
-	version: 2;
-	/** Whether the model is asked to mark terms at all. */
-	enabled: boolean;
+export interface GlossaryData {
+	version: 3;
 	terms: Record<string, Entry>;
 }
 
@@ -50,49 +40,41 @@ export const normalize = (term: string): string => term.trim().toLowerCase().rep
 /** Storage key. Terms keep their bare name so version 1 files load unchanged. */
 export const keyOf = (kind: Kind, term: string): string => (kind === "term" ? normalize(term) : `${kind}:${normalize(term)}`);
 
-const empty = (): GlossaryFile => ({ version: 2, enabled: true, terms: {} });
+export type Persist = (data: GlossaryData) => void;
 
 export class Glossary {
-	private data: GlossaryFile;
-	private readonly path: string;
+	private data: GlossaryData = { version: 3, terms: {} };
+	private readonly persist: Persist;
 
-	constructor(path: string) {
-		this.path = path;
-		this.data = Glossary.read(path);
+	constructor(persist: Persist = () => {}) {
+		this.persist = persist;
 	}
 
-	private static read(path: string): GlossaryFile {
-		try {
-			const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<GlossaryFile>;
-			const terms: Record<string, Entry> = {};
-			for (const [key, raw] of Object.entries(parsed.terms ?? {})) {
-				const entry = raw as Partial<Entry>;
-				if (!entry.term) continue;
-				terms[key] = {
-					...entry,
-					kind: entry.kind && isKind(entry.kind) ? entry.kind : "term",
-					related: Array.isArray(entry.related) ? entry.related : [],
-					lookups: typeof entry.lookups === "number" ? entry.lookups : 0,
-					quiz: {
-						asked: entry.quiz?.asked ?? 0,
-						missed: entry.quiz?.missed ?? 0,
-						...(entry.quiz?.lastAsked ? { lastAsked: entry.quiz.lastAsked } : {}),
-					},
-				} as Entry;
-			}
-			return { version: 2, enabled: parsed.enabled !== false, terms };
-		} catch {
-			return empty();
+	/** Replace the contents with a stored snapshot, tolerating older shapes. */
+	load(snapshot: unknown): void {
+		const parsed = (snapshot ?? {}) as Partial<GlossaryData>;
+		const terms: Record<string, Entry> = {};
+		for (const [key, raw] of Object.entries(parsed.terms ?? {})) {
+			const entry = raw as Partial<Entry>;
+			if (!entry.term) continue;
+			terms[key] = {
+				...entry,
+				kind: entry.kind && isKind(entry.kind) ? entry.kind : "term",
+				related: Array.isArray(entry.related) ? entry.related : [],
+				lookups: typeof entry.lookups === "number" ? entry.lookups : 0,
+				quiz: {
+					asked: entry.quiz?.asked ?? 0,
+					missed: entry.quiz?.missed ?? 0,
+					...(entry.quiz?.lastAsked ? { lastAsked: entry.quiz.lastAsked } : {}),
+				},
+			} as Entry;
 		}
+		this.data = { version: 3, terms };
 	}
 
-	get enabled(): boolean {
-		return this.data.enabled;
-	}
-
-	setEnabled(enabled: boolean): void {
-		this.data.enabled = enabled;
-		this.save();
+	/** A copy safe to store. */
+	snapshot(): GlossaryData {
+		return JSON.parse(JSON.stringify(this.data)) as GlossaryData;
 	}
 
 	get size(): number {
@@ -105,11 +87,9 @@ export class Glossary {
 		return this.data.terms[keyOf("term", term)] ?? KINDS.map((k) => this.data.terms[keyOf(k, term)]).find(Boolean);
 	}
 
-	/** Every entry, most recent first. With `project`, project-scoped kinds are limited to it. */
-	all(project?: string): Entry[] {
-		return Object.values(this.data.terms)
-			.filter((e) => !project || !PROJECT_KINDS.has(e.kind) || e.projects.includes(project))
-			.sort((a, b) => (a.lastSeen < b.lastSeen ? 1 : -1));
+	/** Every entry, most recent first. */
+	all(): Entry[] {
+		return Object.values(this.data.terms).sort((a, b) => (a.lastSeen < b.lastSeen ? 1 : -1));
 	}
 
 	/**
@@ -193,10 +173,7 @@ export class Glossary {
 
 	save(): void {
 		try {
-			mkdirSync(dirname(this.path), { recursive: true });
-			const tmp = `${this.path}.tmp`;
-			writeFileSync(tmp, `${JSON.stringify(this.data, null, "\t")}\n`);
-			renameSync(tmp, this.path);
+			this.persist(this.snapshot());
 		} catch {
 			// Losing persistence is not worth breaking the reply.
 		}
