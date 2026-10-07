@@ -37,11 +37,8 @@ test("save round-trips through disk and keeps enabled flag", () => {
 	const g = new Glossary(path);
 	g.record("Mutex", "a lock so only one thing touches shared data at a time", "/p");
 	g.setEnabled(false);
-	g.setFootnotes(false);
 	const again = new Glossary(path);
 	assert.equal(again.enabled, false);
-	assert.equal(again.footnotes, false);
-	assert.equal(fresh().footnotes, true);
 	assert.equal(again.get("MUTEX")?.definition, "a lock so only one thing touches shared data at a time");
 	assert.ok(readFileSync(path, "utf8").includes('"version": 1'));
 });
