@@ -41,3 +41,11 @@ bolded term.
 
 Hints are keyboard-only on purpose: pi's normal mode gives extensions no mouse
 events, so hover is not an option.
+
+## Develop
+
+    npm test           # unit tests, plain node, no install needed
+    npm run typecheck  # links pi's own type declarations into node_modules/ and runs tsc
+
+`PI_VOCAB_FILE=/tmp/x.json pi -e ./src/vocab.ts ...` runs against a scratch
+glossary instead of the real one.
