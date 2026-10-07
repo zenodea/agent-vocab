@@ -20,21 +20,48 @@ Or for a checkout you want to hack on:
 
 | Key | Does |
 |---|---|
-| `alt+w` | Open the glossary. `1`-`9` picks a term from the last reply. Typing filters the whole glossary. `esc` closes. |
+| `alt+w` | Open or close the glossary. `1`-`9` picks a term from the last reply. Typing filters the whole glossary. `esc` closes. |
 | `alt+shift+w` | Look up whatever is typed in the input box, without sending it. |
+
+Inside the glossary:
+
+| Key | Does |
+|---|---|
+| `ctrl+e` | Ask the agent to explain the selected entry again, plainly, with an example from this project. |
+| `tab` | Follow the first link of the selected entry (see: ...). |
 
 ## Commands
 
 | Command | Does |
 |---|---|
 | `/vocab` | Same as `alt+w`. |
-| `/vocab toggle` | Stop or resume asking the model to mark terms. |
+| `/vocab quiz [n]` | Five flashcards (or `n`) from the entries most likely to have slipped: looked up often, missed before, not seen for a while. Self-graded: `space` reveals, `y` got it, `n` missed. |
+| `/vocab toggle` | Stop or resume asking the model to mark terms. On by default. |
 | `/vocab forget <term>` | Remove a term from the glossary. |
+
+## Kinds
+
+Everything renders the same way in the reply, `**name**` plus a number, so the
+screen does not get busier. The glossary shows a glyph per kind.
+
+| Kind | Answers | Glyph | Scope |
+|---|---|---|---|
+| term | what is this called | | global |
+| concept | how does this work | `◇` | global |
+| why | why did we do it this way | `?` | this directory |
+| where | where does this live | `@` | this directory |
+| how | how do I do this again | `›` | this directory |
+| gotcha | what bit us before | `!` | this directory |
+
+Entries can link to each other (`see: scope, callback`). Links go both ways.
+Every time you open an entry in the glossary it counts as a lookup; entries you
+keep looking up float to the top of the quiz.
 
 ## How it works
 
 A short system-prompt section asks the model to write new terms as
-`[[term|one plain sentence]]`. When a reply finishes, the extension strips the
+`[[term|one plain sentence]]`, or `[[kind: name|definition|see: other]]` for
+the other kinds. When a reply finishes, the extension strips the
 markers, renders `**term**` plus a superscript digit, and stores the definition
 in `~/.pi/agent/vocab.json`. The model never sees the markers again, only the
 bolded term.
