@@ -32,6 +32,8 @@ export interface Entry {
 	projects: string[];
 	/** Names of entries this one connects to, as written. */
 	related: string[];
+	/** How often the user opened this entry in the overlay. High means not sticking. */
+	lookups: number;
 }
 
 export interface GlossaryFile {
@@ -68,6 +70,7 @@ export class Glossary {
 					...entry,
 					kind: entry.kind && isKind(entry.kind) ? entry.kind : "term",
 					related: Array.isArray(entry.related) ? entry.related : [],
+					lookups: typeof entry.lookups === "number" ? entry.lookups : 0,
 				} as Entry;
 			}
 			return { version: 2, enabled: parsed.enabled !== false, terms };
@@ -134,6 +137,7 @@ export class Glossary {
 			count: 1,
 			projects: [project],
 			related: [],
+			lookups: 0,
 		};
 		this.data.terms[key] = entry;
 		this.link(entry, related);
@@ -148,6 +152,14 @@ export class Glossary {
 			const other = this.get(name);
 			if (other && !other.related.some((r) => normalize(r) === normalize(entry.term))) other.related.push(entry.term);
 		}
+	}
+
+	/** Count a lookup. Returns false when the entry is unknown. */
+	lookup(term: string, kind?: Kind): boolean {
+		const entry = this.get(term, kind);
+		if (!entry) return false;
+		entry.lookups += 1;
+		return true;
 	}
 
 	/** Remove an entry. Without a kind, removes every kind with that name. */

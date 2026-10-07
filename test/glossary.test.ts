@@ -90,3 +90,15 @@ test("links go both ways and never to self", () => {
 	g.record("callback", "a function handed over to be called later", "/p", "term", new Date(), ["closure"]);
 	assert.deepEqual(g.get("closure")?.related, ["scope", "callback"]);
 });
+
+test("lookups count and survive a save", () => {
+	const dir = mkdtempSync(join(tmpdir(), "vocab-"));
+	const path = join(dir, "vocab.json");
+	const g = new Glossary(path);
+	g.record("Thunk", "a wrapped value that runs later", "/p");
+	assert.equal(g.lookup("thunk"), true);
+	assert.equal(g.lookup("thunk"), true);
+	assert.equal(g.lookup("nope"), false);
+	g.save();
+	assert.equal(new Glossary(path).get("thunk")?.lookups, 2);
+});

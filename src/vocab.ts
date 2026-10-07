@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Glossary } from "./glossary.ts";
 import { type Hint, recoverHints, rewrite } from "./markers.ts";
-import { VocabOverlay } from "./overlay.ts";
+import { KIND_LABEL, type OverlayResult, VocabOverlay } from "./overlay.ts";
 import { PROMPT_SECTION } from "./prompt.ts";
 
 // PI_VOCAB_FILE overrides the location, mostly for tests.
@@ -47,13 +47,32 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus("vocab", n > 0 ? ctx.ui.theme.fg("accent", `vocab ${n}`) : undefined);
 	};
 
+	let overlayOpen = false;
 	const openOverlay = async (ctx: ExtensionContext, initialQuery?: string) => {
-		if (!ctx.hasUI) return;
-		await ctx.ui.custom<undefined>(
-			(_tui, theme, _keys, done) =>
-				new VocabOverlay(theme, { hints, glossary: glossary.all(), initialQuery, width: 72 }, done),
-			{ overlay: true, overlayOptions: { width: "80%", maxHeight: "80%", anchor: "center", minWidth: 40 } },
-		);
+		if (!ctx.hasUI || overlayOpen) return;
+		overlayOpen = true;
+		let result: OverlayResult | undefined;
+		try {
+			result = await ctx.ui.custom<OverlayResult>(
+				(_tui, theme, _keys, done) =>
+					new VocabOverlay(theme, { hints, glossary: glossary.all(ctx.cwd), initialQuery, width: 72 }, done),
+				{ overlay: true, overlayOptions: { width: "80%", maxHeight: "80%", anchor: "center", minWidth: 40 } },
+			);
+		} finally {
+			overlayOpen = false;
+		}
+		if (!result) return;
+		// Every entry the user deliberately landed on counts as a lookup.
+		let counted = false;
+		for (const item of result.viewed) counted = glossary.lookup(item.term, item.kind) || counted;
+		if (counted) glossary.save();
+		if (result.action === "explain" && result.item) {
+			const { kind, term } = result.item;
+			const label = kind === "term" ? "" : ` (${KIND_LABEL[kind]})`;
+			pi.sendUserMessage(
+				`Explain [[${kind === "term" ? "" : `${kind}: `}${term}]] again${label}. Plain words, under 80 words, one concrete example from this project. Keep the [[...]] marker so it keeps its number.`,
+			);
+		}
 	};
 
 	// On resume, find the last assistant reply and read its hint numbers back.

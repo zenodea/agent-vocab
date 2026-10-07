@@ -39,6 +39,15 @@ export interface OverlayItem {
 	entry?: Entry;
 }
 
+/** What the overlay hands back when it closes. */
+export interface OverlayResult {
+	action: "close" | "explain";
+	/** The entry selected when the overlay closed or ctrl+e was pressed. */
+	item?: OverlayItem;
+	/** Entries the user deliberately landed on, for lookup counting. */
+	viewed: OverlayItem[];
+}
+
 export interface OverlayOptions {
 	hints: Hint[];
 	glossary: Entry[];
@@ -58,15 +67,17 @@ export class VocabOverlay implements Component {
 
 	private readonly theme: Theme;
 	private readonly opts: OverlayOptions;
-	private readonly done: (result: undefined) => void;
+	private readonly done: (result: OverlayResult) => void;
+	private readonly viewed = new Map<string, OverlayItem>();
 
-	constructor(theme: Theme, opts: OverlayOptions, done: (result: undefined) => void) {
+	constructor(theme: Theme, opts: OverlayOptions, done: (result: OverlayResult) => void) {
 		this.theme = theme;
 		this.opts = opts;
 		this.done = done;
 		this.query = opts.initialQuery ?? "";
 		this.width = opts.width ?? 72;
 		for (const e of opts.glossary) this.byTerm.set(`${e.kind}:${e.term.toLowerCase()}`, e);
+		if (this.query) this.markViewed();
 	}
 
 	/** What the list shows right now: last-reply hints, or glossary matches when filtering. */
@@ -90,6 +101,17 @@ export class VocabOverlay implements Component {
 		});
 	}
 
+	/** Remember that the user deliberately landed on the current item. */
+	private markViewed(): void {
+		const item = this.items()[this.selected];
+		if (item) this.viewed.set(`${item.kind}:${item.term.toLowerCase()}`, item);
+	}
+
+	private finish(action: OverlayResult["action"]): void {
+		const item = this.items()[this.selected];
+		this.done({ action, item, viewed: [...this.viewed.values()] });
+	}
+
 	/** Pi calls this when cached output must be dropped. Nothing is cached here. */
 	invalidate(): void {}
 
@@ -99,16 +121,32 @@ export class VocabOverlay implements Component {
 	}
 
 	handleInput(data: string): void {
-		if (matchesKey(data, "escape") || matchesKey(data, "return") || matchesKey(data, "ctrl+c")) {
-			this.done(undefined);
+		// The key that opened the overlay closes it too, so alt+w is a toggle.
+		if (
+			matchesKey(data, "escape") ||
+			matchesKey(data, "return") ||
+			matchesKey(data, "ctrl+c") ||
+			matchesKey(data, "alt+w")
+		) {
+			this.finish("close");
+			return;
+		}
+		// ctrl+e asks the agent to explain the selected entry again.
+		if (matchesKey(data, "ctrl+e")) {
+			this.markViewed();
+			this.finish("explain");
 			return;
 		}
 		if (matchesKey(data, "up") || matchesKey(data, "ctrl+p") || matchesKey(data, "ctrl+k")) {
 			this.selected -= 1;
+			this.clampSelection(this.items());
+			this.markViewed();
 			return;
 		}
 		if (matchesKey(data, "down") || matchesKey(data, "ctrl+n") || matchesKey(data, "ctrl+j")) {
 			this.selected += 1;
+			this.clampSelection(this.items());
+			this.markViewed();
 			return;
 		}
 		// tab follows the first link of the selected entry.
@@ -118,6 +156,7 @@ export class VocabOverlay implements Component {
 			if (target) {
 				this.query = target;
 				this.selected = 0;
+				this.markViewed();
 			}
 			return;
 		}
@@ -135,12 +174,17 @@ export class VocabOverlay implements Component {
 		if (!this.query && /^[1-9]$/.test(data)) {
 			const n = Number(data);
 			const i = this.opts.hints.findIndex((h) => h.index === n);
-			if (i >= 0) this.selected = i;
+			if (i >= 0) {
+				this.selected = i;
+				this.markViewed();
+			}
 			return;
 		}
 		if (data.length >= 1 && !/[\x00-\x1f\x7f]/.test(data)) {
 			this.query += data;
 			this.selected = 0;
+			// A filter that narrows to one hit counts as finding it.
+			if (this.items().length === 1) this.markViewed();
 		}
 	}
 
@@ -202,14 +246,16 @@ export class VocabOverlay implements Component {
 				const e = current.entry;
 				const times = e.count === 1 ? "seen once" : `seen ${e.count} times`;
 				const where = e.projects.length ? `, first in ${e.projects[0]!.split("/").pop() ?? e.projects[0]}` : "";
-				lines.push(row(t.fg("dim", `${times}${where}`)));
+				const looked = e.lookups >= 2 ? t.fg("warning", ` · looked up ${e.lookups}×`) : "";
+				lines.push(row(t.fg("dim", `${times}${where}`) + looked));
 			}
 		}
 
 		lines.push(blank);
 		const hasLink = (current?.related.length ?? 0) > 0;
-		const tabHint = hasLink ? " · tab follow link" : "";
-		lines.push(row(t.fg("dim", filtering ? `↑↓ move · backspace edit${tabHint} · esc close` : `1-9 pick · ↑↓ move · type to search${tabHint} · esc close`)));
+		const tabHint = hasLink ? " · tab link" : "";
+		const explain = current ? " · ^e explain again" : "";
+		lines.push(row(t.fg("dim", filtering ? `↑↓ move · backspace edit${tabHint}${explain} · esc` : `1-9 pick · ↑↓ · type to search${tabHint}${explain} · esc`)));
 		lines.push(border("╰") + border("─".repeat(w - 2)) + border("╯"));
 		return lines;
 	}
