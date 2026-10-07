@@ -20,7 +20,7 @@ Or for a checkout you want to hack on:
 
 | Key | Does |
 |---|---|
-| `alt+w` | Open or close the glossary. `1`-`9` picks a term from the last reply. Typing filters the whole glossary. `esc` closes. |
+| `alt+w` | Open or close the glossary. Typing a number picks that hint. Typing a word filters the whole glossary. `esc` closes. |
 | `alt+shift+w` | Look up whatever is typed in the input box, without sending it. |
 
 Inside the glossary:
@@ -61,10 +61,12 @@ keep looking up float to the top of the quiz.
 
 A short system-prompt section asks the model to write new terms as
 `[[term|one plain sentence]]`, or `[[kind: name|definition|see: other]]` for
-the other kinds. When a reply finishes, the extension strips the
-markers, renders `**term**` plus a superscript digit, and stores the definition
-in `~/.pi/agent/vocab.json`. The model never sees the markers again, only the
-bolded term.
+the other kinds. While the reply streams, the extension swaps the text the
+screen shows for `**term**` plus a superscript number the moment each marker is
+complete; an unfinished marker shows as the bold name, or nothing until the name
+is complete. When the reply finishes, the stored message is rewritten the same
+way and the definition goes to `~/.pi/agent/vocab.json`. The model never sees
+the markers again, only the bolded term.
 
 The model marks a term once. The extension then numbers every other mention in
 the reply, plurals included, and any term already in the glossary from an

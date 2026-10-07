@@ -1,8 +1,8 @@
 /**
  * pi-vocab: numbered jargon hints in replies, with a one-key glossary.
  *
- *   alt+w          open the glossary; 1-9 picks a term from the last reply,
- *                  typing searches everything ever stored
+ *   alt+w          open the glossary; a number picks a hint, typing searches
+ *                  everything ever stored
  *   alt+shift+w    look up the text in the input box
  *   /vocab         same as alt+w
  *   /vocab toggle  stop or resume asking the model to mark terms (on by default)
@@ -10,15 +10,18 @@
  *   /vocab quiz [n]  flashcards for the entries most likely to have slipped
  *
  * The model writes [[term|definition]] or [[kind: name|definition]] for a
- * concept, why, where, how or gotcha; message_end turns that into **name**¹ and
- * stores the definition in ~/.pi/agent/vocab.json. Terms and concepts are
- * global; the other kinds only show inside the project they came from.
+ * concept, why, where, how or gotcha. While the reply streams, the text shown
+ * on screen is rewritten to **name**¹ as soon as each marker is complete; at
+ * message_end the stored message is rewritten the same way and definitions go
+ * to ~/.pi/agent/vocab.json. Numbers are per session: closure stays ¹² until
+ * you start a new session. Terms and concepts are global; the other kinds only
+ * show inside the project they came from.
  */
 
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Glossary } from "./glossary.ts";
-import { type Hint, recoverHints, rewrite } from "./markers.ts";
+import { type Hint, type KnownTerm, normalizeTerm, recoverHints, rewrite } from "./markers.ts";
 import { KIND_LABEL, type OverlayResult, VocabOverlay } from "./overlay.ts";
 import { PROMPT_SECTION } from "./prompt.ts";
 import { pickCards, QuizOverlay, type QuizResult } from "./quiz.ts";
@@ -26,17 +29,22 @@ import { pickCards, QuizOverlay, type QuizResult } from "./quiz.ts";
 // PI_VOCAB_FILE overrides the location, mostly for tests.
 const GLOSSARY_FILE = process.env.PI_VOCAB_FILE || join(getAgentDir(), "vocab.json");
 
+type TextBlock = { type: "text"; text: string };
+const isText = (c: { type: string }): c is TextBlock => c.type === "text";
+
 export default function (pi: ExtensionAPI) {
 	const glossary = new Glossary(GLOSSARY_FILE);
 
-	/** Hints from the reply currently on screen, in order. */
-	let hints: Hint[] = [];
-	/** Same hints keyed by normalized term, so a repeat keeps its number. */
+	/** Every hint of this session, keyed by normalized name. Numbers never change. */
 	let known = new Map<string, Hint>();
+	/** Hints already written to the glossary, so streaming never double counts. */
+	let recorded = new Set<string>();
 
-	const resetHints = () => {
-		hints = [];
+	const hints = (): Hint[] => [...known.values()].sort((a, b) => a.index - b.index);
+
+	const resetSession = () => {
 		known = new Map();
+		recorded = new Set();
 	};
 
 	const showStatus = (ctx: ExtensionContext) => {
@@ -45,8 +53,25 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.setStatus("vocab", ctx.ui.theme.fg("dim", "vocab off"));
 			return;
 		}
-		const n = hints.length;
+		const n = known.size;
 		ctx.ui.setStatus("vocab", n > 0 ? ctx.ui.theme.fg("accent", `vocab ${n}`) : undefined);
+	};
+
+	const candidates = (ctx: ExtensionContext): KnownTerm[] =>
+		glossary.all(ctx.cwd).map((e) => ({ kind: e.kind, term: e.term, definition: e.definition || undefined }));
+
+	/** Rewrite the text blocks of an assistant message. Returns undefined when nothing changed. */
+	const rewriteBlocks = (content: readonly { type: string }[], ctx: ExtensionContext, streaming: boolean) => {
+		let changed = false;
+		const cands = candidates(ctx);
+		const out = content.map((block) => {
+			if (!isText(block) || !block.text.trim()) return block;
+			const result = rewrite(block.text, 1, known, cands, { streaming });
+			if (result.text === block.text) return block;
+			changed = true;
+			return { ...block, text: result.text };
+		});
+		return changed ? out : undefined;
 	};
 
 	let overlayOpen = false;
@@ -57,7 +82,7 @@ export default function (pi: ExtensionAPI) {
 		try {
 			result = await ctx.ui.custom<OverlayResult>(
 				(_tui, theme, _keys, done) =>
-					new VocabOverlay(theme, { hints, glossary: glossary.all(ctx.cwd), initialQuery, width: 72 }, done),
+					new VocabOverlay(theme, { hints: hints(), glossary: glossary.all(ctx.cwd), initialQuery, width: 72 }, done),
 				{ overlay: true, overlayOptions: { width: "80%", maxHeight: "80%", anchor: "center", minWidth: 40 } },
 			);
 		} finally {
@@ -96,25 +121,19 @@ export default function (pi: ExtensionAPI) {
 		glossary.save();
 	};
 
-	// On resume, find the last assistant reply and read its hint numbers back.
+	// On resume, read every number back out of the branch so they stay stable.
 	pi.on("session_start", async (_event, ctx) => {
-		resetHints();
-		const branch = ctx.sessionManager.getBranch();
-		for (let i = branch.length - 1; i >= 0; i--) {
-			const entry = branch[i]!;
+		resetSession();
+		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-			const text = entry.message.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("\n");
-			const recovered = recoverHints(text);
-			if (recovered.length === 0) continue;
-			hints = recovered.map((h) => {
-				const entry = glossary.get(h.term);
-				return { ...h, kind: entry?.kind ?? "term", definition: entry?.definition, related: entry?.related };
-			});
-			for (const h of hints) known.set(h.term.toLowerCase(), h);
-			break;
+			const text = entry.message.content.filter(isText).map((c) => c.text).join("\n");
+			for (const h of recoverHints(text)) {
+				const key = normalizeTerm(h.term);
+				if (known.has(key)) continue;
+				const stored = glossary.get(h.term);
+				known.set(key, { ...h, kind: stored?.kind ?? "term", definition: stored?.definition, related: stored?.related });
+				recorded.add(key);
+			}
 		}
 		showStatus(ctx);
 	});
@@ -124,44 +143,41 @@ export default function (pi: ExtensionAPI) {
 		else delete event.systemPromptOptions.sections.vocab;
 	});
 
-	// A new user prompt starts a fresh numbering. Tool-call round trips within
-	// the same answer keep counting from where the previous message stopped.
-	pi.on("agent_start", async (_event, ctx) => {
-		resetHints();
-		showStatus(ctx);
+	// While streaming, swap the text the screen shows. The event's message is the
+	// object the TUI renders next, and a copy of the model's own buffer, so this
+	// changes the display only.
+	pi.on("message_update", async (event, ctx) => {
+		if (event.message.role !== "assistant" || !ctx.hasUI) return;
+		if (!event.message.content.some((c) => isText(c) && c.text.includes("[["))) return;
+		const content = rewriteBlocks(event.message.content, ctx, true);
+		if (content) {
+			event.message.content = content as typeof event.message.content;
+			showStatus(ctx);
+		}
 	});
 
 	pi.on("message_end", async (event, ctx) => {
 		const msg = event.message;
 		if (msg.role !== "assistant") return;
-		let changed = false;
-		// Every known term is a candidate, so a repeat from an earlier reply is
-		// numbered even when the model forgot to mark it.
-		const candidates = glossary
-			.all(ctx.cwd)
-			.map((e) => ({ kind: e.kind, term: e.term, definition: e.definition || undefined }));
-		const content = msg.content.map((block) => {
-			if (block.type !== "text" || !block.text.trim()) return block;
-			const result = rewrite(block.text, hints.length + 1, known, candidates);
-			if (result.text === block.text) return block;
-			changed = true;
-			for (const h of result.hints) {
-				hints.push(h);
-				const entry = glossary.record(h.term, h.definition, ctx.cwd, h.kind, new Date(), h.related ?? []);
-				h.related = entry.related;
-				if (!h.definition) h.definition = entry.definition || undefined;
-				candidates.push({ kind: entry.kind, term: entry.term, definition: entry.definition || undefined });
-			}
-			return { ...block, text: result.text };
-		});
-		if (!changed) return;
-		glossary.save();
+		const content = rewriteBlocks(msg.content, ctx, false);
+		// Record whatever is new, whether it was first seen streaming or just now.
+		let saved = false;
+		for (const [key, h] of known) {
+			if (recorded.has(key)) continue;
+			recorded.add(key);
+			const entry = glossary.record(h.term, h.definition, ctx.cwd, h.kind, new Date(), h.related ?? []);
+			if (!h.definition) h.definition = entry.definition || undefined;
+			h.related = entry.related;
+			saved = true;
+		}
+		if (saved) glossary.save();
 		showStatus(ctx);
-		return { message: { ...msg, content } };
+		if (!content) return;
+		return { message: { ...msg, content: content as typeof msg.content } };
 	});
 
 	pi.registerShortcut("alt+w", {
-		description: "vocab: open the glossary for the last reply",
+		description: "vocab: open the glossary",
 		handler: (ctx) => openOverlay(ctx),
 	});
 
@@ -185,7 +201,7 @@ export default function (pi: ExtensionAPI) {
 				const term = rest.join(" ");
 				if (!term) return ctx.ui.notify("usage: /vocab forget <term>", "warning");
 				ctx.ui.notify(glossary.forget(term) ? `forgot "${term}"` : `"${term}" is not in the glossary`, "info");
-				hints = hints.filter((h) => h.term.toLowerCase() !== term.toLowerCase());
+				known.delete(normalizeTerm(term));
 				showStatus(ctx);
 				return;
 			}

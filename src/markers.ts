@@ -50,10 +50,22 @@ export interface KnownTerm {
 	definition?: string;
 }
 
-const SUPERSCRIPT = ["", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
-export const MAX_HINTS = 9;
+const SUPERSCRIPT_DIGITS = ["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
 
-export const superscript = (n: number): string => SUPERSCRIPT[n] ?? "";
+/** 12 → ¹². Numbers are per session, so they can grow past nine. */
+export const superscript = (n: number): string =>
+	n > 0 ? String(n).split("").map((d) => SUPERSCRIPT_DIGITS[Number(d)] ?? "").join("") : "";
+
+/** ¹² → 12, or 0 when the text is not a superscript number. */
+export const fromSuperscript = (s: string): number => {
+	let out = "";
+	for (const ch of s) {
+		const d = SUPERSCRIPT_DIGITS.indexOf(ch);
+		if (d < 0) return 0;
+		out += d;
+	}
+	return out ? Number(out) : 0;
+};
 
 // [[name]], [[name|definition]], [[kind: name|definition]]. No nesting, no newlines.
 const MARKER = /\[\[(?:([a-z]+):\s*)?([^\[\]|\n]+?)(?:\|([^\[\]\n]+?))?\]\]/g;
@@ -62,7 +74,10 @@ const MARKER = /\[\[(?:([a-z]+):\s*)?([^\[\]|\n]+?)(?:\|([^\[\]\n]+?))?\]\]/g;
 const FENCE = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?\n\2[ \t]*(?=\n|$)/g;
 
 // Spans the highlight pass must not touch: inline code, links, existing hints.
-const PROTECTED = /`[^`\n]*`|\*\*[^*\n]+\*\*[¹²³⁴⁵⁶⁷⁸⁹]?|\[[^\]\n]*\]\([^)\n]*\)|https?:\/\/\S+/g;
+const PROTECTED = /`[^`\n]*`|\*\*[^*\n]+\*\*[⁰¹²³⁴⁵⁶⁷⁸⁹]*|\[[^\]\n]*\]\([^)\n]*\)|https?:\/\/\S+/g;
+
+// While streaming, an unfinished marker at the very end of the text.
+const OPEN_MARKER = /\[\[(?:([a-z]+):\s*)?([^\[\]|\n]*)(?:\|([^\[\]\n]*))?$/;
 
 export const normalizeTerm = (term: string): string => term.trim().toLowerCase().replace(/\s+/g, " ");
 
@@ -125,14 +140,36 @@ function termPattern(terms: string[]): RegExp | undefined {
  * only numbered when marked, since their names are often ordinary words.
  * Code, links and existing hints are left alone.
  */
+export interface RewriteOptions {
+	/**
+	 * The text is still arriving. An unfinished marker at the end is shown as
+	 * its bold name once the name is complete, and hidden before that.
+	 */
+	streaming?: boolean;
+}
+
 export function rewrite(
 	text: string,
 	startIndex = 1,
 	known: Map<string, Hint> = new Map(),
 	glossary: KnownTerm[] = [],
+	options: RewriteOptions = {},
 ): Rewrite {
 	const hints: Hint[] = [];
 	let next = startIndex;
+	for (const h of known.values()) if (h.index >= next) next = h.index + 1;
+
+	// Hold back an unfinished trailing marker so it never shows raw.
+	let tail = "";
+	if (options.streaming) {
+		const open = OPEN_MARKER.exec(text);
+		if (open && !text.slice(open.index).includes("]]")) {
+			const name = open[2]?.trim();
+			// Name complete once the "|" has arrived; before that show nothing.
+			tail = open[3] !== undefined && name ? `**${name}**` : "";
+			text = text.slice(0, open.index);
+		}
+	}
 	const byKey = new Map<string, KnownTerm>();
 	for (const g of glossary) {
 		if (g.kind === "term" || g.kind === "concept") byKey.set(normalizeTerm(g.term), g);
@@ -145,7 +182,6 @@ export function rewrite(
 			const key = normalizeTerm(marker.term);
 			let hint = known.get(key);
 			if (!hint) {
-				if (next > MAX_HINTS) return `**${marker.term}**`;
 				hint = { index: next++, kind: marker.kind, term: marker.term, definition: marker.definition };
 				if (marker.related) hint.related = marker.related;
 				known.set(key, hint);
@@ -171,7 +207,6 @@ export function rewrite(
 				if (!hint) {
 					const g = byKey.get(base);
 					if (!g) return word;
-					if (next > MAX_HINTS) return `**${word}**`;
 					hint = { index: next++, kind: g.kind, term: g.term, definition: g.definition };
 					known.set(base, hint);
 					hints.push(hint);
@@ -199,7 +234,7 @@ export function rewrite(
 	}
 	out += highlight(transform(text.slice(last)));
 
-	return { text: out, hints };
+	return { text: out + tail, hints };
 }
 
 /**
@@ -209,8 +244,8 @@ export function rewrite(
  */
 export function recoverHints(text: string): Hint[] {
 	const found = new Map<number, Hint>();
-	for (const m of text.matchAll(/\*\*([^*\n]+?)\*\*([¹²³⁴⁵⁶⁷⁸⁹])/g)) {
-		const index = SUPERSCRIPT.indexOf(m[2]!);
+	for (const m of text.matchAll(/\*\*([^*\n]+?)\*\*([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g)) {
+		const index = fromSuperscript(m[2]!);
 		if (index > 0 && !found.has(index)) found.set(index, { index, kind: "term", term: m[1]!.trim() });
 	}
 	return [...found.values()].sort((a, b) => a.index - b.index);

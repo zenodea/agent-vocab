@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { findMarkers, recoverHints, rewrite } from "../src/markers.ts";
+import { findMarkers, fromSuperscript, recoverHints, rewrite, superscript } from "../src/markers.ts";
 
 test("rewrite turns markers into numbered bold terms", () => {
 	const r = rewrite("A [[closure|a function that remembers its surroundings]] uses [[scope|where names are visible]].");
@@ -32,11 +32,32 @@ test("numbering continues across messages and known terms reuse numbers", () => 
 	assert.deepEqual(b.hints.map((h) => h.index), [2]);
 });
 
-test("beyond nine, terms are bold without a number", () => {
-	const src = Array.from({ length: 11 }, (_, i) => `[[t${i}|d${i}]]`).join(" ");
+test("numbers go past nine with multi-digit superscripts", () => {
+	const src = Array.from({ length: 12 }, (_, i) => `[[t${i}|d${i}]]`).join(" ");
 	const r = rewrite(src);
-	assert.equal(r.hints.length, 9);
-	assert.ok(r.text.endsWith("**t8**⁹ **t9** **t10**"), r.text);
+	assert.equal(r.hints.length, 12);
+	assert.ok(r.text.endsWith("**t9**¹⁰ **t10**¹¹ **t11**¹²"), r.text);
+	assert.deepEqual(recoverHints(r.text).map((h) => h.index), Array.from({ length: 12 }, (_, i) => i + 1));
+});
+
+test("numbering continues from the highest number already known", () => {
+	const known = new Map();
+	rewrite("[[a|1]] [[b|2]]", 1, known);
+	const r = rewrite("[[c|3]] and [[a]]", 1, known);
+	assert.equal(r.text, "**c**³ and **a**¹");
+});
+
+test("streaming hides an unfinished marker until its name is complete", () => {
+	const known = new Map();
+	assert.equal(rewrite("A [[clo", 1, known, [], { streaming: true }).text, "A ");
+	assert.equal(rewrite("A [[closure|a func", 1, known, [], { streaming: true }).text, "A **closure**");
+	assert.equal(rewrite("A [[concept: auth here|a tok", 1, known, [], { streaming: true }).text, "A **auth here**");
+	assert.equal(rewrite("A [[closure|a function]] is", 1, known, [], { streaming: true }).text, "A **closure**¹ is");
+	assert.equal(known.size, 1);
+});
+
+test("streaming leaves finished text alone", () => {
+	assert.equal(rewrite("plain [[x|y]] text.", 1, new Map(), [], { streaming: true }).text, "plain **x**¹ text.");
 });
 
 test("fenced code blocks are left alone", () => {
@@ -131,4 +152,11 @@ test("a see: segment becomes related links and stays out of the definition", () 
 	assert.deepEqual(r.hints[0]!.related, ["scope", "callback"]);
 	assert.equal(r.hints[0]!.definition, "keeps scope alive");
 	assert.equal(r.hints[1]!.related, undefined);
+});
+
+test("superscript round-trips", () => {
+	assert.equal(superscript(7), "⁷");
+	assert.equal(superscript(23), "²³");
+	assert.equal(fromSuperscript("²³"), 23);
+	assert.equal(fromSuperscript("x"), 0);
 });

@@ -80,25 +80,45 @@ export class VocabOverlay implements Component {
 		if (this.query) this.markViewed();
 	}
 
-	/** What the list shows right now: last-reply hints, or glossary matches when filtering. */
+	/** Digits only: the user is typing a hint number. */
+	private numberMode(): boolean {
+		return /^\d+$/.test(this.query);
+	}
+
+	private hintItem(h: Hint): OverlayItem {
+		const entry = this.byTerm.get(`${h.kind}:${h.term.toLowerCase()}`) ?? this.byTerm.get(`term:${h.term.toLowerCase()}`);
+		return {
+			index: h.index,
+			kind: entry?.kind ?? h.kind,
+			term: h.term,
+			related: entry?.related ?? h.related ?? [],
+			definition: h.definition ?? entry?.definition ?? "",
+			entry,
+		};
+	}
+
+	/**
+	 * What the list shows right now. Empty query: the newest hints of this
+	 * session. Digits: hints whose number starts with them, exact match first.
+	 * Anything else: fuzzy matches over the whole glossary.
+	 */
 	items(): OverlayItem[] {
-		if (this.query.trim()) {
-			const matches = fuzzyFilter(this.opts.glossary, this.query.trim(), (e) => e.term);
+		const q = this.query.trim();
+		if (q && this.numberMode()) {
+			const exact = this.opts.hints.filter((h) => String(h.index) === q);
+			const rest = this.opts.hints.filter((h) => String(h.index) !== q && String(h.index).startsWith(q));
+			return [...exact, ...rest.sort((a, b) => b.index - a.index)].slice(0, MAX_ROWS).map((h) => this.hintItem(h));
+		}
+		if (q) {
+			const matches = fuzzyFilter(this.opts.glossary, q, (e) => e.term);
 			return matches
 				.slice(0, MAX_ROWS)
 				.map((entry) => ({ kind: entry.kind, term: entry.term, definition: entry.definition, related: entry.related, entry }));
 		}
-		return this.opts.hints.map((h) => {
-			const entry = this.byTerm.get(`${h.kind}:${h.term.toLowerCase()}`) ?? this.byTerm.get(`term:${h.term.toLowerCase()}`);
-			return {
-				index: h.index,
-				kind: entry?.kind ?? h.kind,
-				term: h.term,
-				related: entry?.related ?? h.related ?? [],
-				definition: h.definition ?? entry?.definition ?? "",
-				entry,
-			};
-		});
+		return [...this.opts.hints]
+			.sort((a, b) => b.index - a.index)
+			.slice(0, MAX_ROWS)
+			.map((h) => this.hintItem(h));
 	}
 
 	/** Remember that the user deliberately landed on the current item. */
@@ -170,21 +190,14 @@ export class VocabOverlay implements Component {
 			this.selected = 0;
 			return;
 		}
-		// A digit picks a hint while the query is empty; otherwise it is typed.
-		if (!this.query && /^[1-9]$/.test(data)) {
-			const n = Number(data);
-			const i = this.opts.hints.findIndex((h) => h.index === n);
-			if (i >= 0) {
-				this.selected = i;
-				this.markViewed();
-			}
-			return;
-		}
 		if (data.length >= 1 && !/[\x00-\x1f\x7f]/.test(data)) {
 			this.query += data;
 			this.selected = 0;
-			// A filter that narrows to one hit counts as finding it.
-			if (this.items().length === 1) this.markViewed();
+			// A number that lands on a hint, or a filter down to one hit, counts as finding it.
+			const items = this.items();
+			if ((this.numberMode() && items[0] && String(items[0].index) === this.query.trim()) || items.length === 1) {
+				this.markViewed();
+			}
 		}
 	}
 
@@ -205,22 +218,28 @@ export class VocabOverlay implements Component {
 		lines.push(border("╭") + border("─") + title + border("─".repeat(Math.max(0, pad - 1))) + border("╮"));
 
 		const filtering = this.query.trim().length > 0;
-		const prompt = filtering ? this.query : t.fg("dim", "type to search the whole glossary");
+		const prompt = filtering ? this.query : t.fg("dim", "number picks a hint · word searches the glossary");
 		lines.push(row(`${t.fg("accent", ">")} ${prompt}${t.fg("accent", "▏")}`));
 		lines.push(border("├") + border("─".repeat(w - 2)) + border("┤"));
 
 		if (items.length === 0) {
 			const msg = filtering
-				? "no term matches"
+				? this.numberMode()
+					? `no hint ${this.query.trim()} in this session`
+					: "no term matches"
 				: this.opts.glossary.length === 0
 					? "nothing yet: terms appear here as the agent explains them"
-					: "no new terms in the last reply";
+					: "no terms in this session yet";
 			lines.push(row(t.fg("muted", msg)));
 		} else {
-			if (!filtering) lines.push(row(t.fg("muted", "this reply")));
+			if (!filtering) {
+				const total = this.opts.hints.length;
+				const more = total > items.length ? t.fg("dim", `  ${total - items.length} more, type a number`) : "";
+				lines.push(row(t.fg("muted", "this session, newest first") + more));
+			}
 			items.forEach((item, i) => {
 				const sel = i === this.selected;
-				const label = item.index ? `${item.index} ` : "· ";
+				const label = item.index ? `${item.index} `.padStart(3) : " · ";
 				const glyph = KIND_GLYPH[item.kind] ? t.fg("warning", `${KIND_GLYPH[item.kind]} `) : "";
 				const term = sel ? t.bold(t.fg("accent", item.term)) : t.bold(item.term);
 				const used = visibleWidth(label) + visibleWidth(glyph) + visibleWidth(item.term) + 3;
@@ -255,7 +274,7 @@ export class VocabOverlay implements Component {
 		const hasLink = (current?.related.length ?? 0) > 0;
 		const tabHint = hasLink ? " · tab link" : "";
 		const explain = current ? " · ^e explain again" : "";
-		lines.push(row(t.fg("dim", filtering ? `↑↓ move · backspace edit${tabHint}${explain} · esc` : `1-9 pick · ↑↓ · type to search${tabHint}${explain} · esc`)));
+		lines.push(row(t.fg("dim", filtering ? `↑↓ move · backspace edit${tabHint}${explain} · esc` : `number pick · ↑↓ · type to search${tabHint}${explain} · esc`)));
 		lines.push(border("╰") + border("─".repeat(w - 2)) + border("╯"));
 		return lines;
 	}
