@@ -6,6 +6,8 @@
  *   alt+shift+w    look up the text in the input box
  *   /vocab         same as alt+w
  *   /vocab toggle  stop or resume asking the model to mark terms (on by default)
+ *   /vocab footnotes  show or hide the term strip above the input (on by default)
+ *   alt+1..9, ctrl+1..9  jump straight to that term of the last reply
  *   /vocab forget <term>
  *
  * The model writes [[term|definition]]; message_end turns that into **term**¹
@@ -16,6 +18,7 @@ import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Glossary } from "./glossary.ts";
 import { type Hint, recoverHints, rewrite } from "./markers.ts";
+import { Footnotes } from "./footnotes.ts";
 import { VocabOverlay } from "./overlay.ts";
 import { PROMPT_SECTION } from "./prompt.ts";
 
@@ -46,6 +49,16 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	let overlayOpen = false;
+	/** The strip above the editor listing the last reply's terms. */
+	const showFootnotes = (ctx: ExtensionContext) => {
+		if (!ctx.hasUI) return;
+		if (!glossary.footnotes || hints.length === 0) {
+			ctx.ui.setWidget("vocab", undefined);
+			return;
+		}
+		ctx.ui.setWidget("vocab", (_tui, theme) => new Footnotes(theme, hints));
+	};
+
 	const openOverlay = async (ctx: ExtensionContext, initialQuery?: string, initialIndex?: number) => {
 		if (!ctx.hasUI || overlayOpen) return;
 		overlayOpen = true;
@@ -79,6 +92,7 @@ export default function (pi: ExtensionAPI) {
 			break;
 		}
 		showStatus(ctx);
+		showFootnotes(ctx);
 	});
 
 	pi.on("before_agent_start", async (event) => {
@@ -91,6 +105,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_start", async (_event, ctx) => {
 		resetHints();
 		showStatus(ctx);
+		showFootnotes(ctx);
 	});
 
 	pi.on("message_end", async (event, ctx) => {
@@ -112,6 +127,7 @@ export default function (pi: ExtensionAPI) {
 		if (!changed) return;
 		glossary.save();
 		showStatus(ctx);
+		showFootnotes(ctx);
 		return { message: { ...msg, content } };
 	});
 
@@ -141,7 +157,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("vocab", {
-		description: "Glossary of terms the agent explained. /vocab toggle, /vocab forget <term>",
+		description: "Glossary of terms the agent explained. /vocab toggle | footnotes | forget <term>",
 		handler: async (args, ctx) => {
 			const [sub, ...rest] = args.trim().split(/\s+/).filter(Boolean);
 			if (sub === "toggle" || sub === "on" || sub === "off") {
@@ -151,12 +167,19 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(next ? "vocab on: new terms get marked from your next message" : "vocab off: no more marking", "info");
 				return;
 			}
+			if (sub === "footnotes") {
+				glossary.setFootnotes(!glossary.footnotes);
+				showFootnotes(ctx);
+				ctx.ui.notify(glossary.footnotes ? "footnotes on: last reply's terms listed above the input" : "footnotes off", "info");
+				return;
+			}
 			if (sub === "forget") {
 				const term = rest.join(" ");
 				if (!term) return ctx.ui.notify("usage: /vocab forget <term>", "warning");
 				ctx.ui.notify(glossary.forget(term) ? `forgot "${term}"` : `"${term}" is not in the glossary`, "info");
 				hints = hints.filter((h) => h.term.toLowerCase() !== term.toLowerCase());
 				showStatus(ctx);
+				showFootnotes(ctx);
 				return;
 			}
 			if (sub === "count") return ctx.ui.notify(`${glossary.size} terms in ${GLOSSARY_FILE}`, "info");

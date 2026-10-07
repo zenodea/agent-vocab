@@ -24,12 +24,14 @@ export interface GlossaryFile {
 	version: 1;
 	/** Whether the model is asked to mark terms at all. */
 	enabled: boolean;
+	/** Whether the last reply's terms are listed above the editor. */
+	footnotes: boolean;
 	terms: Record<string, Entry>;
 }
 
 export const normalize = (term: string): string => term.trim().toLowerCase().replace(/\s+/g, " ");
 
-const empty = (): GlossaryFile => ({ version: 1, enabled: true, terms: {} });
+const empty = (): GlossaryFile => ({ version: 1, enabled: true, footnotes: true, terms: {} });
 
 export class Glossary {
 	private data: GlossaryFile;
@@ -46,6 +48,7 @@ export class Glossary {
 			return {
 				version: 1,
 				enabled: parsed.enabled !== false,
+				footnotes: parsed.footnotes !== false,
 				terms: parsed.terms && typeof parsed.terms === "object" ? parsed.terms : {},
 			};
 		} catch {
@@ -59,6 +62,15 @@ export class Glossary {
 
 	setEnabled(enabled: boolean): void {
 		this.data.enabled = enabled;
+		this.save();
+	}
+
+	get footnotes(): boolean {
+		return this.data.footnotes;
+	}
+
+	setFootnotes(on: boolean): void {
+		this.data.footnotes = on;
 		this.save();
 	}
 
