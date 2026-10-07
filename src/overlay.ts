@@ -22,8 +22,6 @@ export interface OverlayOptions {
 	hints: Hint[];
 	glossary: Entry[];
 	initialQuery?: string;
-	/** Hint number (1-9) to land on when opening. */
-	initialIndex?: number;
 	/** Columns the overlay may use. */
 	width?: number;
 }
@@ -47,10 +45,6 @@ export class VocabOverlay implements Component {
 		this.done = done;
 		this.query = opts.initialQuery ?? "";
 		this.width = opts.width ?? 72;
-		if (opts.initialIndex) {
-			const i = opts.hints.findIndex((h) => h.index === opts.initialIndex);
-			if (i >= 0) this.selected = i;
-		}
 		for (const e of opts.glossary) this.byTerm.set(e.term.toLowerCase(), e);
 	}
 
@@ -80,13 +74,7 @@ export class VocabOverlay implements Component {
 	}
 
 	handleInput(data: string): void {
-		// The key that opened the overlay closes it too, so alt+w is a toggle.
-		if (
-			matchesKey(data, "escape") ||
-			matchesKey(data, "return") ||
-			matchesKey(data, "ctrl+c") ||
-			matchesKey(data, "alt+w")
-		) {
+		if (matchesKey(data, "escape") || matchesKey(data, "return") || matchesKey(data, "ctrl+c")) {
 			this.done(undefined);
 			return;
 		}
