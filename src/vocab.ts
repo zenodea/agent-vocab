@@ -21,7 +21,7 @@
 
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { Glossary, type GlossaryData } from "./glossary.ts";
+import { Glossary, type GlossaryData, isKind } from "./glossary.ts";
 import { type Hint, type KnownTerm, normalizeTerm, recoverHints, rewrite, stripAnsi } from "./markers.ts";
 import { KIND_LABEL, type OverlayResult, VocabOverlay } from "./overlay.ts";
 import { PROMPT_SECTION } from "./prompt.ts";
@@ -135,17 +135,28 @@ export default function (pi: ExtensionAPI) {
 		const branch = ctx.sessionManager.getBranch();
 		const last = [...branch].reverse().find((e) => e.type === "custom" && e.customType === ENTRY_TYPE);
 		glossary.load(last && last.type === "custom" ? last.data : undefined);
+		let migrated = false;
 		for (const entry of branch) {
 			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 			const text = entry.message.content.filter(isText).map((c) => c.text).join("\n");
 			for (const h of recoverHints(text)) {
 				const key = normalizeTerm(h.term);
 				if (known.has(key)) continue;
-				const stored = glossary.get(h.term);
+				let stored = glossary.get(h.term);
+				if (!stored) {
+					// Sessions from before the glossary moved into the session file: pull the
+					// definition out of the old global file, once, and keep it here from now on.
+					const old = settings.legacyDefinition(h.term);
+					if (old) {
+						stored = glossary.record(h.term, old.definition, ctx.cwd, isKind(old.kind) ? old.kind : "term");
+						migrated = true;
+					}
+				}
 				known.set(key, { ...h, kind: stored?.kind ?? "term", definition: stored?.definition, related: stored?.related });
 				recorded.add(key);
 			}
 		}
+		if (migrated) glossary.save();
 		showStatus(ctx);
 	});
 
