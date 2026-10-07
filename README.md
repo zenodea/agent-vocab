@@ -39,6 +39,11 @@ markers, renders `**term**` plus a superscript digit, and stores the definition
 in `~/.pi/agent/vocab.json`. The model never sees the markers again, only the
 bolded term.
 
+The model marks a term once. The extension then numbers every other mention in
+the reply, plurals included, and any term already in the glossary from an
+earlier reply, so a word is never numbered in one sentence and bare in the
+next. Code, links and URLs are left alone.
+
 Hints are keyboard-only on purpose: pi's normal mode gives extensions no mouse
 events, so hover is not an option.
 
