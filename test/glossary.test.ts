@@ -80,3 +80,13 @@ test("version 1 files load as terms", () => {
 	const g = new Glossary(path);
 	assert.equal(g.get("closure")?.kind, "term");
 });
+
+test("links go both ways and never to self", () => {
+	const g = fresh();
+	g.record("scope", "where names live", "/p");
+	g.record("closure", "keeps scope alive", "/p", "term", new Date(), ["scope", "closure", "callback"]);
+	assert.deepEqual(g.get("closure")?.related, ["scope", "callback"]);
+	assert.deepEqual(g.get("scope")?.related, ["closure"]);
+	g.record("callback", "a function handed over to be called later", "/p", "term", new Date(), ["closure"]);
+	assert.deepEqual(g.get("closure")?.related, ["scope", "callback"]);
+});

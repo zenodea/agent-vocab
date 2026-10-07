@@ -33,6 +33,7 @@ export interface OverlayItem {
 	kind: Kind;
 	term: string;
 	definition: string;
+	related: string[];
 	/** Set for terms from the last reply. */
 	index?: number;
 	entry?: Entry;
@@ -74,7 +75,7 @@ export class VocabOverlay implements Component {
 			const matches = fuzzyFilter(this.opts.glossary, this.query.trim(), (e) => e.term);
 			return matches
 				.slice(0, MAX_ROWS)
-				.map((entry) => ({ kind: entry.kind, term: entry.term, definition: entry.definition, entry }));
+				.map((entry) => ({ kind: entry.kind, term: entry.term, definition: entry.definition, related: entry.related, entry }));
 		}
 		return this.opts.hints.map((h) => {
 			const entry = this.byTerm.get(`${h.kind}:${h.term.toLowerCase()}`) ?? this.byTerm.get(`term:${h.term.toLowerCase()}`);
@@ -82,6 +83,7 @@ export class VocabOverlay implements Component {
 				index: h.index,
 				kind: entry?.kind ?? h.kind,
 				term: h.term,
+				related: entry?.related ?? h.related ?? [],
 				definition: h.definition ?? entry?.definition ?? "",
 				entry,
 			};
@@ -107,6 +109,16 @@ export class VocabOverlay implements Component {
 		}
 		if (matchesKey(data, "down") || matchesKey(data, "ctrl+n") || matchesKey(data, "ctrl+j")) {
 			this.selected += 1;
+			return;
+		}
+		// tab follows the first link of the selected entry.
+		if (matchesKey(data, "tab")) {
+			const current = this.items()[this.selected];
+			const target = current?.related[0];
+			if (target) {
+				this.query = target;
+				this.selected = 0;
+			}
 			return;
 		}
 		if (matchesKey(data, "backspace")) {
@@ -183,6 +195,9 @@ export class VocabOverlay implements Component {
 			lines.push(row(head + kind));
 			const def = current.definition || "No definition stored. Ask the agent what it means.";
 			for (const l of wrap(def, inner)) lines.push(row(l));
+			if (current.related.length) {
+				lines.push(row(t.fg("dim", "see: ") + t.fg("accent", clip(current.related.join(", "), inner - 5))));
+			}
 			if (current.entry) {
 				const e = current.entry;
 				const times = e.count === 1 ? "seen once" : `seen ${e.count} times`;
@@ -192,7 +207,9 @@ export class VocabOverlay implements Component {
 		}
 
 		lines.push(blank);
-		lines.push(row(t.fg("dim", filtering ? "↑↓ move · backspace edit · esc close" : "1-9 pick · ↑↓ move · type to search · esc close")));
+		const hasLink = (current?.related.length ?? 0) > 0;
+		const tabHint = hasLink ? " · tab follow link" : "";
+		lines.push(row(t.fg("dim", filtering ? `↑↓ move · backspace edit${tabHint} · esc close` : `1-9 pick · ↑↓ move · type to search${tabHint} · esc close`)));
 		lines.push(border("╰") + border("─".repeat(w - 2)) + border("╯"));
 		return lines;
 	}

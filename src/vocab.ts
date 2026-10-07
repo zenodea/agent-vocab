@@ -71,7 +71,7 @@ export default function (pi: ExtensionAPI) {
 			if (recovered.length === 0) continue;
 			hints = recovered.map((h) => {
 				const entry = glossary.get(h.term);
-				return { ...h, kind: entry?.kind ?? "term", definition: entry?.definition };
+				return { ...h, kind: entry?.kind ?? "term", definition: entry?.definition, related: entry?.related };
 			});
 			for (const h of hints) known.set(h.term.toLowerCase(), h);
 			break;
@@ -107,7 +107,8 @@ export default function (pi: ExtensionAPI) {
 			changed = true;
 			for (const h of result.hints) {
 				hints.push(h);
-				const entry = glossary.record(h.term, h.definition, ctx.cwd, h.kind);
+				const entry = glossary.record(h.term, h.definition, ctx.cwd, h.kind, new Date(), h.related ?? []);
+				h.related = entry.related;
 				if (!h.definition) h.definition = entry.definition || undefined;
 				candidates.push({ kind: entry.kind, term: entry.term, definition: entry.definition || undefined });
 			}

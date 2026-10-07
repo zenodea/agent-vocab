@@ -30,6 +30,8 @@ export interface Entry {
 	count: number;
 	/** Working directories the entry was seen in. */
 	projects: string[];
+	/** Names of entries this one connects to, as written. */
+	related: string[];
 }
 
 export interface GlossaryFile {
@@ -62,7 +64,11 @@ export class Glossary {
 			for (const [key, raw] of Object.entries(parsed.terms ?? {})) {
 				const entry = raw as Partial<Entry>;
 				if (!entry.term) continue;
-				terms[key] = { ...entry, kind: entry.kind && isKind(entry.kind) ? entry.kind : "term" } as Entry;
+				terms[key] = {
+					...entry,
+					kind: entry.kind && isKind(entry.kind) ? entry.kind : "term",
+					related: Array.isArray(entry.related) ? entry.related : [],
+				} as Entry;
 			}
 			return { version: 2, enabled: parsed.enabled !== false, terms };
 		} catch {
@@ -100,7 +106,14 @@ export class Glossary {
 	 * Record a sighting. A new definition replaces the old one only when the old
 	 * one is missing, so the first good explanation sticks.
 	 */
-	record(term: string, definition: string | undefined, project: string, kind: Kind = "term", now = new Date()): Entry {
+	record(
+		term: string,
+		definition: string | undefined,
+		project: string,
+		kind: Kind = "term",
+		now = new Date(),
+		related: string[] = [],
+	): Entry {
 		const key = keyOf(kind, term);
 		const iso = now.toISOString();
 		const existing = this.data.terms[key];
@@ -109,6 +122,7 @@ export class Glossary {
 			existing.lastSeen = iso;
 			if (!existing.definition && definition) existing.definition = definition;
 			if (!existing.projects.includes(project)) existing.projects.push(project);
+			this.link(existing, related);
 			return existing;
 		}
 		const entry: Entry = {
@@ -119,9 +133,21 @@ export class Glossary {
 			lastSeen: iso,
 			count: 1,
 			projects: [project],
+			related: [],
 		};
 		this.data.terms[key] = entry;
+		this.link(entry, related);
 		return entry;
+	}
+
+	/** Connect both ways, skipping self and duplicates. The other side need not exist yet. */
+	private link(entry: Entry, related: string[]): void {
+		for (const name of related) {
+			if (normalize(name) === normalize(entry.term)) continue;
+			if (!entry.related.some((r) => normalize(r) === normalize(name))) entry.related.push(name.trim());
+			const other = this.get(name);
+			if (other && !other.related.some((r) => normalize(r) === normalize(entry.term))) other.related.push(entry.term);
+		}
 	}
 
 	/** Remove an entry. Without a kind, removes every kind with that name. */

@@ -12,6 +12,8 @@
  *   [[how: run tests|make test, with the db container up]]
  *   [[gotcha: seeding|run migrations first or seeding silently fails]]
  *
+ * A third segment links entries: [[closure|def|see: scope, callback]].
+ *
  * `[[term]]` with no definition means "already explained before": it still gets
  * a hint, the definition comes from the glossary. Everything renders the same
  * way, **name** plus a superscript digit, so the reply does not get busier.
@@ -23,6 +25,8 @@ export interface Marker {
 	kind: Kind;
 	term: string;
 	definition?: string;
+	/** Names of entries this one connects to. */
+	related?: string[];
 }
 
 export interface Hint {
@@ -31,6 +35,7 @@ export interface Hint {
 	kind: Kind;
 	term: string;
 	definition?: string;
+	related?: string[];
 }
 
 export interface Rewrite {
@@ -72,7 +77,22 @@ function parseMarker(prefix: string | undefined, rawTerm: string, rawDef: string
 		else term = `${prefix}: ${term}`;
 	}
 	if (!term) return undefined;
-	return { kind, term, definition: rawDef?.trim() || undefined };
+	// The definition may carry a trailing "|see: a, b" segment.
+	let definition: string | undefined;
+	let related: string[] | undefined;
+	for (const part of (rawDef ?? "").split("|")) {
+		const seg = part.trim();
+		if (!seg) continue;
+		const link = /^(?:see|related|links?)\s*:\s*(.+)$/i.exec(seg);
+		if (link) {
+			related = [...(related ?? []), ...link[1]!.split(/\s*,\s*/).map((r) => r.trim()).filter(Boolean)];
+		} else if (!definition) {
+			definition = seg;
+		}
+	}
+	const marker: Marker = { kind, term, definition };
+	if (related) marker.related = related;
+	return marker;
 }
 
 /** Pull markers out of text without changing it. */
@@ -127,10 +147,12 @@ export function rewrite(
 			if (!hint) {
 				if (next > MAX_HINTS) return `**${marker.term}**`;
 				hint = { index: next++, kind: marker.kind, term: marker.term, definition: marker.definition };
+				if (marker.related) hint.related = marker.related;
 				known.set(key, hint);
 				hints.push(hint);
-			} else if (!hint.definition && marker.definition) {
-				hint.definition = marker.definition;
+			} else {
+				if (!hint.definition && marker.definition) hint.definition = marker.definition;
+				if (marker.related) hint.related = [...new Set([...(hint.related ?? []), ...marker.related])];
 			}
 			return `**${marker.term}**${superscript(hint.index)}`;
 		});

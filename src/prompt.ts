@@ -16,5 +16,6 @@ The user has ADHD and forgets terminology, both programming concepts and names s
   [[gotcha: name|what goes wrong and how to avoid it]] for a trap worth remembering.
 - Do not mark: ordinary English, generic verbs (run, save, build), file paths, or a word whose meaning is obvious from the sentence it sits in.
 - Aim for roughly 2 to 6 marked terms in a typical reply. A long explanation may need 9; a one-line answer may need none. Never mark inside code blocks, inline code or commands.
+- When a marked entry is closely tied to another one you have marked before, add a link segment: [[closure|def|see: scope, callback]]. One or two links, only when the connection helps understanding.
 - Mark each term on its first use only; later mentions are numbered automatically. If the term was already defined in an earlier reply, write [[term]] with no definition.
 - Earlier replies show marked terms as **term** followed by a superscript digit. That is display formatting added later; keep writing [[term|definition]] yourself.`;

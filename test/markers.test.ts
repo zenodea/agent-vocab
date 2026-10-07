@@ -124,3 +124,11 @@ test("project kinds in the glossary are not auto-numbered, concepts are", () => 
 	]);
 	assert.equal(r.text, "Run the tests after **auth here**¹ is set up.");
 });
+
+test("a see: segment becomes related links and stays out of the definition", () => {
+	const r = rewrite("[[closure|keeps scope alive|see: scope, callback]] and [[scope|where names live]]");
+	assert.equal(r.text, "**closure**¹ and **scope**²");
+	assert.deepEqual(r.hints[0]!.related, ["scope", "callback"]);
+	assert.equal(r.hints[0]!.definition, "keeps scope alive");
+	assert.equal(r.hints[1]!.related, undefined);
+});
