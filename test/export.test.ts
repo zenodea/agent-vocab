@@ -5,10 +5,10 @@ import { EXPORT_MARKER, isOurs, renderGlossary } from "../src/export.ts";
 
 test("renderGlossary groups by kind, sorts, and skips empty definitions", () => {
 	const g = new Glossary();
-	g.record("scope", "where names live", "/p");
-	g.record("closure", "keeps scope alive", "/p", "term", new Date(), ["scope"]);
-	g.record("seeding", "migrate first", "/p", "gotcha");
-	g.record("bare", undefined, "/p");
+	g.record("scope", "where names live");
+	g.record("closure", "keeps scope alive", { related: ["scope"] });
+	g.record("seeding", "migrate first", { kind: "gotcha" });
+	g.record("bare", undefined);
 	const md = renderGlossary(g.all(), new Date("2026-10-07T00:00:00Z"));
 	assert.ok(md.startsWith(EXPORT_MARKER));
 	assert.ok(md.includes("Exported 2026-10-07. 4 entries."));

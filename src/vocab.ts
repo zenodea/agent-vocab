@@ -24,8 +24,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { isOurs, renderGlossary } from "./export.ts";
-import { Glossary, type GlossaryData, isKind, KIND_LABEL } from "./glossary.ts";
-import { type Hint, type KnownTerm, normalizeTerm, recoverHints, rewrite, stripAnsi } from "./markers.ts";
+import { Glossary, type GlossaryData, isKind, KIND_LABEL, normalize } from "./glossary.ts";
+import { type Hint, type KnownTerm, recoverHints, rewrite, stripAnsi } from "./markers.ts";
 import { type OverlayResult, VocabOverlay } from "./overlay.ts";
 import { PROMPT_SECTION } from "./prompt.ts";
 import { pickCards, QuizOverlay, type QuizResult } from "./quiz.ts";
@@ -70,12 +70,12 @@ export default function (pi: ExtensionAPI) {
 		glossary.all().map((e) => ({ kind: e.kind, term: e.term, definition: e.definition || undefined }));
 
 	/** Rewrite the text blocks of an assistant message. Returns undefined when nothing changed. */
-	const rewriteBlocks = (content: readonly { type: string }[], ctx: ExtensionContext, streaming: boolean) => {
+	const rewriteBlocks = (content: readonly { type: string }[], streaming: boolean) => {
 		let changed = false;
 		const cands = candidates();
 		const out = content.map((block) => {
 			if (!isText(block) || !block.text.trim()) return block;
-			const result = rewrite(block.text, 1, known, cands, { streaming });
+			const result = rewrite(block.text, { known, glossary: cands, streaming });
 			if (result.text === block.text) return block;
 			changed = true;
 			return { ...block, text: result.text };
@@ -143,7 +143,7 @@ export default function (pi: ExtensionAPI) {
 			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 			const text = entry.message.content.filter(isText).map((c) => c.text).join("\n");
 			for (const h of recoverHints(text)) {
-				const key = normalizeTerm(h.term);
+				const key = normalize(h.term);
 				if (known.has(key)) continue;
 				let stored = glossary.get(h.term);
 				if (!stored) {
@@ -151,7 +151,7 @@ export default function (pi: ExtensionAPI) {
 					// definition out of the old global file, once, and keep it here from now on.
 					const old = settings.legacyDefinition(h.term);
 					if (old) {
-						stored = glossary.record(h.term, old.definition, ctx.cwd, isKind(old.kind) ? old.kind : "term");
+						stored = glossary.record(h.term, old.definition, { kind: isKind(old.kind) ? old.kind : "term" });
 						migrated = true;
 					}
 				}
@@ -186,7 +186,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("message_update", async (event, ctx) => {
 		if (event.message.role !== "assistant" || !ctx.hasUI) return;
 		if (!event.message.content.some((c) => isText(c) && c.text.includes("[["))) return;
-		const content = rewriteBlocks(event.message.content, ctx, true);
+		const content = rewriteBlocks(event.message.content, true);
 		if (content) {
 			event.message.content = content as typeof event.message.content;
 			showStatus(ctx);
@@ -196,13 +196,13 @@ export default function (pi: ExtensionAPI) {
 	pi.on("message_end", async (event, ctx) => {
 		const msg = event.message;
 		if (msg.role !== "assistant") return;
-		const content = rewriteBlocks(msg.content, ctx, false);
+		const content = rewriteBlocks(msg.content, false);
 		// Record whatever is new, whether it was first seen streaming or just now.
 		let saved = false;
 		for (const [key, h] of known) {
 			if (recorded.has(key)) continue;
 			recorded.add(key);
-			const entry = glossary.record(h.term, h.definition, ctx.cwd, h.kind, new Date(), h.related ?? []);
+			const entry = glossary.record(h.term, h.definition, { kind: h.kind, related: h.related });
 			if (!h.definition) h.definition = entry.definition || undefined;
 			h.related = entry.related;
 			saved = true;
@@ -238,7 +238,7 @@ export default function (pi: ExtensionAPI) {
 				const term = rest.join(" ");
 				if (!term) return ctx.ui.notify("usage: /vocab forget <term>", "warning");
 				ctx.ui.notify(glossary.forget(term) ? `forgot "${term}"` : `"${term}" is not in the glossary`, "info");
-				known.delete(normalizeTerm(term));
+				known.delete(normalize(term));
 				showStatus(ctx);
 				return;
 			}

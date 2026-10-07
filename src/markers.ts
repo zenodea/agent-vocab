@@ -19,7 +19,7 @@
  * way, **name** plus a superscript digit, so the reply does not get busier.
  */
 
-import { isKind, type Kind } from "./glossary.ts";
+import { isKind, type Kind, normalize } from "./glossary.ts";
 
 export interface Marker {
 	kind: Kind;
@@ -30,7 +30,7 @@ export interface Marker {
 }
 
 export interface Hint {
-	/** 1-based, shown as a superscript. Stable within one reply. */
+	/** 1-based, shown as a superscript. Stable for the whole session. */
 	index: number;
 	kind: Kind;
 	term: string;
@@ -112,8 +112,6 @@ const PROTECTED = /`[^`\n]*`|\*{2,3}[^*\n]+\*{2,3}[⁰¹²³⁴⁵⁶⁷⁸⁹]*
 // While streaming, an unfinished marker at the very end of the text.
 const OPEN_MARKER = /\[\[(?:([a-z]+):\s*)?([^\[\]|\n]*)(?:\|([^\[\]\n]*))?$/;
 
-export const normalizeTerm = (term: string): string => term.trim().toLowerCase().replace(/\s+/g, " ");
-
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Parse a marker's pieces. An unknown prefix is kept as part of the name. */
@@ -143,37 +141,20 @@ function parseMarker(prefix: string | undefined, rawTerm: string, rawDef: string
 	return marker;
 }
 
-/** Pull markers out of text without changing it. */
-export function findMarkers(text: string): Marker[] {
-	const out: Marker[] = [];
-	for (const m of text.matchAll(MARKER)) {
-		const marker = parseMarker(m[1], m[2]!, m[3]);
-		if (marker) out.push(marker);
-	}
-	return out;
-}
-
 /** One regex matching any of the names as whole words, longest first, with an optional plural s. */
 function termPattern(terms: string[]): RegExp | undefined {
-	const parts = [...new Set(terms.map(normalizeTerm).filter(Boolean))]
+	const parts = [...new Set(terms.map(normalize).filter(Boolean))]
 		.sort((a, b) => b.length - a.length)
 		.map((t) => escapeRegExp(t).replace(/ /g, "\\s+"));
 	if (parts.length === 0) return undefined;
 	return new RegExp(`(?<![\\w-])(?:${parts.join("|")})(?:e?s)?(?![\\w-])`, "gi");
 }
 
-/**
- * Replace markers with bold names carrying a superscript number. `startIndex`
- * lets several messages in the same turn continue the same numbering, and
- * `known` lets a name reuse its number when it shows up again.
- *
- * Afterwards every plain mention of a hinted name, or of a term or concept in
- * `glossary`, gets the same treatment, so a word is never numbered in one
- * sentence and bare in the next. Project kinds (why, where, how, gotcha) are
- * only numbered when marked, since their names are often ordinary words.
- * Code, links and existing hints are left alone.
- */
 export interface RewriteOptions {
+	/** Entries already numbered, keyed by normalized name. New ones are added here. */
+	known?: Map<string, Hint>;
+	/** Entries the glossary knows; plain mentions of terms and concepts get numbered too. */
+	glossary?: KnownTerm[];
 	/**
 	 * The text is still arriving. An unfinished marker at the end is shown as
 	 * its bold name once the name is complete, and hidden before that.
@@ -181,15 +162,21 @@ export interface RewriteOptions {
 	streaming?: boolean;
 }
 
-export function rewrite(
-	text: string,
-	startIndex = 1,
-	known: Map<string, Hint> = new Map(),
-	glossary: KnownTerm[] = [],
-	options: RewriteOptions = {},
-): Rewrite {
+/**
+ * Replace markers with styled names carrying a superscript number. Numbers
+ * continue from the highest one in `known`, and a name that is already known
+ * keeps its number.
+ *
+ * Afterwards every plain mention of a hinted name, or of a term or concept in
+ * `glossary`, gets the same treatment, so a word is never numbered in one
+ * sentence and bare in the next. Project kinds (why, where, how, gotcha) are
+ * only numbered when marked, since their names are often ordinary words.
+ * Code, links and existing hints are left alone.
+ */
+export function rewrite(text: string, options: RewriteOptions = {}): Rewrite {
+	const known = options.known ?? new Map<string, Hint>();
 	const hints: Hint[] = [];
-	let next = startIndex;
+	let next = 1;
 	for (const h of known.values()) if (h.index >= next) next = h.index + 1;
 
 	// Hold back an unfinished trailing marker so it never shows raw.
@@ -205,21 +192,27 @@ export function rewrite(
 		}
 	}
 	const byKey = new Map<string, KnownTerm>();
-	for (const g of glossary) {
-		if (g.kind === "term" || g.kind === "concept") byKey.set(normalizeTerm(g.term), g);
+	for (const g of options.glossary ?? []) {
+		if (g.kind === "term" || g.kind === "concept") byKey.set(normalize(g.term), g);
 	}
+
+	/** Give a name the next number and remember it. */
+	const add = (key: string, kind: Kind, term: string, definition?: string): Hint => {
+		const hint: Hint = { index: next++, kind, term, definition };
+		known.set(key, hint);
+		hints.push(hint);
+		return hint;
+	};
 
 	const transform = (chunk: string): string =>
 		chunk.replace(MARKER, (_whole, prefix: string | undefined, rawTerm: string, rawDef?: string) => {
 			const marker = parseMarker(prefix, rawTerm, rawDef);
 			if (!marker) return "";
-			const key = normalizeTerm(marker.term);
+			const key = normalize(marker.term);
 			let hint = known.get(key);
 			if (!hint) {
-				hint = { index: next++, kind: marker.kind, term: marker.term, definition: marker.definition };
+				hint = add(key, marker.kind, marker.term, marker.definition);
 				if (marker.related) hint.related = marker.related;
-				known.set(key, hint);
-				hints.push(hint);
 			} else {
 				if (!hint.definition && marker.definition) hint.definition = marker.definition;
 				if (marker.related) hint.related = [...new Set([...(hint.related ?? []), ...marker.related])];
@@ -234,16 +227,14 @@ export function rewrite(
 		const mark = (plain: string): string =>
 			plain.replace(pattern, (word: string) => {
 				// Undo the plural we allowed so the lookup key matches.
-				const key = normalizeTerm(word);
+				const key = normalize(word);
 				const base =
 					[key, key.replace(/s$/, ""), key.replace(/es$/, "")].find((k) => known.has(k) || byKey.has(k)) ?? key;
 				let hint = known.get(base);
 				if (!hint) {
 					const g = byKey.get(base);
 					if (!g) return word;
-					hint = { index: next++, kind: g.kind, term: g.term, definition: g.definition };
-					known.set(base, hint);
-					hints.push(hint);
+					hint = add(base, g.kind, g.term, g.definition);
 				}
 				return `${styleName(hint.kind, word)}${superscript(hint.index)}`;
 			});

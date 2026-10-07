@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { findMarkers, fromSuperscript, recoverHints, rewrite, stripAnsi, styleName, superscript } from "../src/markers.ts";
+import { fromSuperscript, recoverHints, rewrite, stripAnsi, styleName, superscript } from "../src/markers.ts";
 
 test("rewrite turns markers into numbered bold terms", () => {
 	const r = rewrite("A [[closure|a function that remembers its surroundings]] uses [[scope|where names are visible]].");
@@ -25,8 +25,8 @@ test("bare marker without definition still gets a hint", () => {
 
 test("numbering continues across messages and known terms reuse numbers", () => {
 	const known = new Map();
-	const a = rewrite("[[A|first]]", 1, known);
-	const b = rewrite("[[B|second]] and [[A]]", a.hints.length + 1, known);
+	const a = rewrite("[[A|first]]", { known });
+	const b = rewrite("[[B|second]] and [[A]]", { known });
 	assert.equal(a.text, "**A**¹");
 	assert.equal(b.text, "**B**² and **A**¹");
 	assert.deepEqual(b.hints.map((h) => h.index), [2]);
@@ -42,22 +42,22 @@ test("numbers go past nine with multi-digit superscripts", () => {
 
 test("numbering continues from the highest number already known", () => {
 	const known = new Map();
-	rewrite("[[a|1]] [[b|2]]", 1, known);
-	const r = rewrite("[[c|3]] and [[a]]", 1, known);
+	rewrite("[[a|1]] [[b|2]]", { known });
+	const r = rewrite("[[c|3]] and [[a]]", { known });
 	assert.equal(r.text, "**c**³ and **a**¹");
 });
 
 test("streaming hides an unfinished marker until its name is complete", () => {
 	const known = new Map();
-	assert.equal(rewrite("A [[clo", 1, known, [], { streaming: true }).text, "A ");
-	assert.equal(rewrite("A [[closure|a func", 1, known, [], { streaming: true }).text, "A **closure**");
-	assert.equal(rewrite("A [[concept: auth here|a tok", 1, known, [], { streaming: true }).text, "A ***auth here***");
-	assert.equal(rewrite("A [[closure|a function]] is", 1, known, [], { streaming: true }).text, "A **closure**¹ is");
+	assert.equal(rewrite("A [[clo", { known, streaming: true }).text, "A ");
+	assert.equal(rewrite("A [[closure|a func", { known, streaming: true }).text, "A **closure**");
+	assert.equal(rewrite("A [[concept: auth here|a tok", { known, streaming: true }).text, "A ***auth here***");
+	assert.equal(rewrite("A [[closure|a function]] is", { known, streaming: true }).text, "A **closure**¹ is");
 	assert.equal(known.size, 1);
 });
 
 test("streaming leaves finished text alone", () => {
-	assert.equal(rewrite("plain [[x|y]] text.", 1, new Map(), [], { streaming: true }).text, "plain **x**¹ text.");
+	assert.equal(rewrite("plain [[x|y]] text.", { known: new Map(), streaming: true }).text, "plain **x**¹ text.");
 });
 
 test("fenced code blocks are left alone", () => {
@@ -70,13 +70,6 @@ test("fenced code blocks are left alone", () => {
 test("a late definition fills a term first seen bare", () => {
 	const r = rewrite("[[cache]] then [[cache|a copy kept close so it is fast to reach]]");
 	assert.equal(r.hints[0]!.definition, "a copy kept close so it is fast to reach");
-});
-
-test("findMarkers reads without rewriting", () => {
-	assert.deepEqual(findMarkers("x [[a|b]] y [[c]]"), [
-		{ kind: "term", term: "a", definition: "b" },
-		{ kind: "term", term: "c", definition: undefined },
-	]);
 });
 
 test("recoverHints reads numbers back out of rendered text", () => {
@@ -98,10 +91,12 @@ test("every plain repeat of a marked term gets the same number", () => {
 });
 
 test("glossary terms mentioned without markers get numbered too", () => {
-	const r = rewrite("Guard it with a mutex, or you get a race condition.", 1, new Map(), [
-		{ kind: "term", term: "race condition", definition: "two threads racing" },
-		{ kind: "term", term: "mutex", definition: "a lock" },
-	]);
+	const r = rewrite("Guard it with a mutex, or you get a race condition.", {
+		glossary: [
+			{ kind: "term", term: "race condition", definition: "two threads racing" },
+			{ kind: "term", term: "mutex", definition: "a lock" },
+		],
+	});
 	assert.equal(r.text, "Guard it with a **mutex**¹, or you get a **race condition**².");
 	assert.deepEqual(r.hints.map((h) => [h.index, h.term, h.definition]), [
 		[1, "mutex", "a lock"],
@@ -118,7 +113,7 @@ test("highlight pass skips inline code, links, urls and partial words", () => {
 });
 
 test("marker terms take the low numbers, glossary mentions follow", () => {
-	const r = rewrite("scope first, then [[closure|c]].", 1, new Map(), [{ kind: "term", term: "scope", definition: "s" }]);
+	const r = rewrite("scope first, then [[closure|c]].", { glossary: [{ kind: "term", term: "scope", definition: "s" }] });
 	assert.equal(r.text, "**scope**² first, then **closure**¹.");
 });
 
@@ -140,10 +135,12 @@ test("an unknown prefix stays part of the name", () => {
 });
 
 test("project kinds in the glossary are not auto-numbered, concepts are", () => {
-	const r = rewrite("Run the tests after auth here is set up.", 1, new Map(), [
-		{ kind: "how", term: "tests", definition: "make test" },
-		{ kind: "concept", term: "auth here", definition: "cookie token" },
-	]);
+	const r = rewrite("Run the tests after auth here is set up.", {
+		glossary: [
+			{ kind: "how", term: "tests", definition: "make test" },
+			{ kind: "concept", term: "auth here", definition: "cookie token" },
+		],
+	});
 	assert.equal(r.text, "Run the tests after ***auth here***¹ is set up.");
 });
 
@@ -169,6 +166,6 @@ test("styled hints are recovered and protected from re-marking", () => {
 		{ index: 2, kind: "term", term: "auth" },
 	]);
 	// A second pass over already-styled text changes nothing.
-	const again = rewrite(r.text, 1, new Map(), [{ kind: "gotcha", term: "seeding", definition: "x" }]);
+	const again = rewrite(r.text, { glossary: [{ kind: "gotcha", term: "seeding", definition: "x" }] });
 	assert.equal(again.text, r.text);
 });

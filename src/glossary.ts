@@ -39,8 +39,6 @@ export interface Entry {
 	lastSeen: string;
 	/** How many replies have marked this entry. */
 	count: number;
-	/** Working directories the entry was seen in. */
-	projects: string[];
 	/** Names of entries this one connects to, as written. */
 	related: string[];
 	/** How often the user opened this entry in the overlay. High means not sticking. */
@@ -56,7 +54,7 @@ export interface GlossaryData {
 
 export const normalize = (term: string): string => term.trim().toLowerCase().replace(/\s+/g, " ");
 
-/** Storage key. Terms keep their bare name so version 1 files load unchanged. */
+/** Storage key. Terms keep their bare name; other kinds are prefixed so "SQLite" and "why: SQLite" coexist. */
 export const keyOf = (kind: Kind, term: string): string => (kind === "term" ? normalize(term) : `${kind}:${normalize(term)}`);
 
 export type Persist = (data: GlossaryData) => void;
@@ -115,39 +113,30 @@ export class Glossary {
 	 * Record a sighting. A new definition replaces the old one only when the old
 	 * one is missing, so the first good explanation sticks.
 	 */
-	record(
-		term: string,
-		definition: string | undefined,
-		project: string,
-		kind: Kind = "term",
-		now = new Date(),
-		related: string[] = [],
-	): Entry {
+	record(term: string, definition: string | undefined, opts: { kind?: Kind; related?: string[]; now?: Date } = {}): Entry {
+		const kind = opts.kind ?? "term";
 		const key = keyOf(kind, term);
-		const iso = now.toISOString();
-		const existing = this.data.terms[key];
-		if (existing) {
-			existing.count += 1;
-			existing.lastSeen = iso;
-			if (!existing.definition && definition) existing.definition = definition;
-			if (!existing.projects.includes(project)) existing.projects.push(project);
-			this.link(existing, related);
-			return existing;
+		const iso = (opts.now ?? new Date()).toISOString();
+		let entry = this.data.terms[key];
+		if (entry) {
+			entry.count += 1;
+			entry.lastSeen = iso;
+			if (!entry.definition && definition) entry.definition = definition;
+		} else {
+			entry = {
+				kind,
+				term: term.trim(),
+				definition: definition ?? "",
+				firstSeen: iso,
+				lastSeen: iso,
+				count: 1,
+				related: [],
+				lookups: 0,
+				quiz: { asked: 0, missed: 0 },
+			};
+			this.data.terms[key] = entry;
 		}
-		const entry: Entry = {
-			kind,
-			term: term.trim(),
-			definition: definition ?? "",
-			firstSeen: iso,
-			lastSeen: iso,
-			count: 1,
-			projects: [project],
-			related: [],
-			lookups: 0,
-			quiz: { asked: 0, missed: 0 },
-		};
-		this.data.terms[key] = entry;
-		this.link(entry, related);
+		this.link(entry, opts.related ?? []);
 		return entry;
 	}
 

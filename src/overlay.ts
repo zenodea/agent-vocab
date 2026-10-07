@@ -1,13 +1,15 @@
 /**
- * The glossary overlay. Digits pick a hint from the last reply, typing filters
- * the whole glossary, up/down moves, enter or esc closes.
+ * The glossary overlay. A number picks a hint of this session, a word searches
+ * the glossary, arrows and ctrl+d/ctrl+u scroll, ctrl+e asks the agent to
+ * explain again, esc closes. The search line and the list window never move;
+ * only the detail panel below them grows.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, fuzzyFilter, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
+import { Box, BOX_WIDTH } from "./box.ts";
 import { type Entry, KIND_GLYPH, KIND_LABEL, type Kind } from "./glossary.ts";
-import type { Hint } from "./markers.ts";
-import { superscript } from "./markers.ts";
+import { type Hint, superscript } from "./markers.ts";
 import { clip, wrap } from "./text.ts";
 
 export interface OverlayItem {
@@ -15,7 +17,7 @@ export interface OverlayItem {
 	term: string;
 	definition: string;
 	related: string[];
-	/** Set for terms from the last reply. */
+	/** The session number, when the item is a hint of this session. */
 	index?: number;
 	entry?: Entry;
 }
@@ -61,7 +63,7 @@ export class VocabOverlay implements Component {
 		this.opts = opts;
 		this.done = done;
 		this.query = opts.initialQuery ?? "";
-		this.width = opts.width ?? 72;
+		this.width = opts.width ?? BOX_WIDTH;
 		for (const e of opts.glossary) this.byTerm.set(`${e.kind}:${e.term.toLowerCase()}`, e);
 		if (this.query) this.markViewed();
 	}
@@ -188,79 +190,63 @@ export class VocabOverlay implements Component {
 
 	render(width: number): string[] {
 		const t = this.theme;
-		const w = Math.max(30, Math.min(this.width, width));
-		const inner = w - 4; // "│ " ... " │"
+		const box = new Box(t, width, this.width);
+		const inner = box.inner;
 		const items = this.items();
 		this.clampSelection(items);
-
-		const border = (s: string) => t.fg("border", s);
-		const row = (s: string) => `${border("│")} ${s}${" ".repeat(Math.max(0, inner - visibleWidth(s)))} ${border("│")}`;
-		const blank = row("");
-		const lines: string[] = [];
-
-		const title = t.bold(t.fg("accent", " vocab "));
-		const pad = w - 2 - visibleWidth(title);
-		lines.push(border("╭") + border("─") + title + border("─".repeat(Math.max(0, pad - 1))) + border("╮"));
-
 		const filtering = this.query.trim().length > 0;
+		const lines: string[] = [box.top("vocab")];
+
 		const prompt = filtering ? this.query : t.fg("dim", "number picks a hint · word searches the glossary");
-		lines.push(row(`${t.fg("accent", ">")} ${prompt}${t.fg("accent", "▏")}`));
-		lines.push(border("├") + border("─".repeat(w - 2)) + border("┤"));
+		lines.push(box.row(`${t.fg("accent", ">")} ${prompt}${t.fg("accent", "▏")}`));
+		lines.push(box.divider());
 
 		// The list window: always LIST_ROWS tall, so nothing above or below it moves.
 		const total = items.length;
 		const first = this.scroll;
 		const last = Math.min(total, first + LIST_ROWS);
-		const range = total > LIST_ROWS ? t.fg("dim", `  ${first + 1}-${last} of ${total}`) : total > 0 ? t.fg("dim", `  ${total}`) : "";
-		const heading = filtering
-			? this.numberMode()
-				? `hint ${this.query.trim()}`
-				: "glossary matches"
-			: "this session, newest first";
-		lines.push(row(t.fg("muted", heading) + range));
+		const range = total > LIST_ROWS ? `  ${first + 1}-${last} of ${total}` : total > 0 ? `  ${total}` : "";
+		const heading = !filtering ? "this session, newest first" : this.numberMode() ? `hint ${this.query.trim()}` : "glossary matches";
+		lines.push(box.row(t.fg("muted", heading) + t.fg("dim", range)));
 		if (total === 0) {
-			const msg = filtering
-				? this.numberMode()
-					? `no hint ${this.query.trim()} in this session`
-					: "no term matches"
-				: this.opts.glossary.length === 0
+			const msg = !filtering
+				? this.opts.glossary.length === 0
 					? "nothing yet: terms appear here as the agent explains them"
-					: "no terms in this session yet";
-			lines.push(row(t.fg("muted", msg)));
+					: "no terms in this session yet"
+				: this.numberMode()
+					? `no hint ${this.query.trim()} in this session`
+					: "no term matches";
+			lines.push(box.row(t.fg("muted", msg)));
 		}
 		for (let i = first; i < last; i++) {
 			const item = items[i]!;
 			const sel = i === this.selected;
-			const label = item.index ? `${item.index} `.padStart(3) : " · ";
+			const label = t.fg(sel ? "accent" : "dim", item.index ? `${item.index} `.padStart(3) : " · ");
 			const glyph = KIND_GLYPH[item.kind] ? t.fg("warning", `${KIND_GLYPH[item.kind]} `) : "";
 			const term = sel ? t.bold(t.fg("accent", item.term)) : t.bold(item.term);
 			const used = visibleWidth(label) + visibleWidth(glyph) + visibleWidth(item.term) + 3;
 			const def = t.fg(sel ? "text" : "muted", clip(item.definition || "(no definition stored)", inner - used));
-			const text = `${t.fg(sel ? "accent" : "dim", label)}${glyph}${term}  ${def}`;
-			const padded = text + " ".repeat(Math.max(0, inner - visibleWidth(text)));
-			lines.push(row(sel ? t.bg("selectedBg", padded) : padded));
+			const text = `${label}${glyph}${term}  ${def}`;
+			lines.push(sel ? box.selectedRow(text) : box.row(text));
 		}
-		for (let i = Math.max(last - first, total === 0 ? 1 : 0); i < LIST_ROWS; i++) lines.push(blank);
+		for (let i = Math.max(last - first, total === 0 ? 1 : 0); i < LIST_ROWS; i++) lines.push(box.row());
 
 		const current = items[this.selected];
 		if (current) {
-			lines.push(border("├") + border("─".repeat(w - 2)) + border("┤"));
-			const head = `${t.bold(t.fg("accent", current.term))}${current.index ? t.fg("dim", superscript(current.index)) : ""}`;
+			lines.push(box.divider());
+			const number = current.index ? t.fg("dim", superscript(current.index)) : "";
 			const kind = current.kind === "term" ? "" : t.fg("warning", `  ${KIND_GLYPH[current.kind]} ${KIND_LABEL[current.kind]}`);
-			lines.push(row(head + kind));
-			const def = current.definition || "No definition stored. Ask the agent what it means.";
-			for (const l of wrap(def, inner)) lines.push(row(l));
-			if (current.related.length) {
-				lines.push(row(t.fg("dim", "see: ") + t.fg("accent", clip(current.related.join(", "), inner - 5))));
-			}
+			lines.push(box.row(t.bold(t.fg("accent", current.term)) + number + kind));
+			for (const l of wrap(current.definition || "No definition stored. Ask the agent what it means.", inner)) lines.push(box.row(l));
+			if (current.related.length) lines.push(box.row(t.fg("dim", "see: ") + t.fg("accent", clip(current.related.join(", "), inner - 5))));
 		}
 
-		lines.push(blank);
-		const hasLink = (current?.related.length ?? 0) > 0;
-		const tabHint = hasLink ? " · tab link" : "";
+		lines.push(box.row());
+		const tabHint = current?.related.length ? " · tab link" : "";
 		const explain = current ? " · ^e explain again" : "";
-		lines.push(row(t.fg("dim", filtering ? `↑↓ ^d ^u scroll · backspace${tabHint}${explain} · esc` : `number or word · ↑↓ ^d ^u scroll${tabHint}${explain} · esc`)));
-		lines.push(border("╰") + border("─".repeat(w - 2)) + border("╯"));
+		const keys = filtering ? `↑↓ ^d ^u scroll · backspace${tabHint}${explain} · esc` : `number or word · ↑↓ ^d ^u scroll${tabHint}${explain} · esc`;
+		lines.push(box.row(t.fg("dim", keys)));
+		lines.push(box.bottom());
 		return lines;
 	}
 }

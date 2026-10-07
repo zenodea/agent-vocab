@@ -11,7 +11,6 @@ const mk = (term: string, over: Partial<Entry> = {}): Entry => ({
 	firstSeen: "2026-10-01T00:00:00Z",
 	lastSeen: "2026-10-06T00:00:00Z",
 	count: 1,
-	projects: ["/p"],
 	related: [],
 	lookups: 0,
 	quiz: { asked: 0, missed: 0 },

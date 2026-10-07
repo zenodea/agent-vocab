@@ -7,6 +7,7 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, matchesKey } from "@earendil-works/pi-tui";
+import { Box, BOX_WIDTH } from "./box.ts";
 import { type Entry, KIND_GLYPH, KIND_LABEL } from "./glossary.ts";
 import { clip, wrap } from "./text.ts";
 
@@ -51,7 +52,7 @@ export class QuizOverlay implements Component {
 	private readonly done: (result: QuizResult) => void;
 	private readonly width: number;
 
-	constructor(theme: Theme, cards: Entry[], done: (result: QuizResult) => void, width = 72) {
+	constructor(theme: Theme, cards: Entry[], done: (result: QuizResult) => void, width = BOX_WIDTH) {
 		this.theme = theme;
 		this.cards = cards;
 		this.done = done;
@@ -91,50 +92,38 @@ export class QuizOverlay implements Component {
 
 	render(width: number): string[] {
 		const t = this.theme;
-		const w = Math.max(30, Math.min(this.width, width));
-		const inner = w - 4;
-		const border = (s: string) => t.fg("border", s);
-		const row = (s: string) => `${border("│")} ${s}${" ".repeat(Math.max(0, inner - visibleLen(s)))} ${border("│")}`;
-		const lines: string[] = [];
-		const title = t.bold(t.fg("accent", ` vocab quiz ${this.phase === "done" ? "" : `${this.i + 1}/${this.cards.length} `}`));
-		lines.push(border("╭─") + title + border("─".repeat(Math.max(0, w - 3 - visibleLen(title)))) + border("╮"));
-
+		const box = new Box(t, width, this.width);
+		const inner = box.inner;
 		const card = this.cards[this.i];
-		if (this.phase === "done" || !card) {
+		const finished = this.phase === "done" || !card;
+		const lines: string[] = [box.top(finished ? "vocab quiz" : `vocab quiz ${this.i + 1}/${this.cards.length}`)];
+
+		if (finished) {
 			const n = this.asked.length;
 			const right = n - this.missed.length;
-			lines.push(row(n === 0 ? t.fg("muted", "nothing to quiz yet: terms appear as the agent explains them") : `${t.bold(`${right}/${n}`)} ${t.fg("muted", "right")}`));
-			if (this.missed.length) {
-				lines.push(row(t.fg("dim", "missed: ") + t.fg("warning", clip(this.missed.map((e) => e.term).join(", "), inner - 8))));
-			}
-			lines.push(row(t.fg("dim", "enter close")));
+			lines.push(box.row(n === 0 ? t.fg("muted", "nothing to quiz yet: terms appear as the agent explains them") : `${t.bold(`${right}/${n}`)} ${t.fg("muted", "right")}`));
+			if (this.missed.length) lines.push(box.row(t.fg("dim", "missed: ") + t.fg("warning", clip(this.missed.map((e) => e.term).join(", "), inner - 8))));
+			lines.push(box.row(t.fg("dim", "enter close")));
 		} else {
 			const kind = card.kind === "term" ? "" : t.fg("warning", ` ${KIND_GLYPH[card.kind]} ${KIND_LABEL[card.kind]}`);
+			const name = t.bold(t.fg("accent", card.term)) + kind;
 			if (this.phase === "front") {
 				if (card.kind === "term") {
-					lines.push(row(t.fg("muted", "what is this called?")));
-					for (const l of wrap(card.definition, inner)) lines.push(row(l));
+					lines.push(box.row(t.fg("muted", "what is this called?")));
+					for (const l of wrap(card.definition, inner)) lines.push(box.row(l));
 				} else {
-					lines.push(row(t.fg("muted", "say it in your own words:")));
-					lines.push(row(t.bold(t.fg("accent", card.term)) + kind));
+					lines.push(box.row(t.fg("muted", "say it in your own words:")));
+					lines.push(box.row(name));
 				}
-				lines.push(row(""));
-				lines.push(row(t.fg("dim", "space reveal · esc quit")));
+				lines.push(box.row(), box.row(t.fg("dim", "space reveal · esc quit")));
 			} else {
-				lines.push(row(t.bold(t.fg("accent", card.term)) + kind));
-				for (const l of wrap(card.definition, inner)) lines.push(row(l));
-				if (card.related.length) lines.push(row(t.fg("dim", "see: ") + t.fg("accent", clip(card.related.join(", "), inner - 5))));
-				lines.push(row(""));
-				lines.push(row(t.fg("dim", "y got it · n missed · esc quit")));
+				lines.push(box.row(name));
+				for (const l of wrap(card.definition, inner)) lines.push(box.row(l));
+				if (card.related.length) lines.push(box.row(t.fg("dim", "see: ") + t.fg("accent", clip(card.related.join(", "), inner - 5))));
+				lines.push(box.row(), box.row(t.fg("dim", "y got it · n missed · esc quit")));
 			}
 		}
-		lines.push(border("╰") + border("─".repeat(w - 2)) + border("╯"));
+		lines.push(box.bottom());
 		return lines;
 	}
-}
-
-/** Width of a styled string without its ANSI codes. */
-function visibleLen(s: string): number {
-	// eslint-disable-next-line no-control-regex
-	return [...s.replace(/\x1b\[[0-9;]*m/g, "")].length;
 }
