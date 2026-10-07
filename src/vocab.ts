@@ -8,6 +8,7 @@
  *   /vocab toggle  stop or resume asking the model to mark terms (on by default)
  *   /vocab forget <term>
  *   /vocab quiz [n]  flashcards for the entries most likely to have slipped
+ *   /vocab export [path] [--force]  write the glossary as GLOSSARY.md in the project
  *
  * The model writes [[term|definition]] or [[kind: name|definition]] for a
  * concept, why, where, how or gotcha. While the reply streams, the text shown
@@ -19,11 +20,13 @@
  * global, in ~/.pi/agent/vocab.json.
  */
 
-import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { Glossary, type GlossaryData, isKind } from "./glossary.ts";
+import { isOurs, renderGlossary } from "./export.ts";
+import { Glossary, type GlossaryData, isKind, KIND_LABEL } from "./glossary.ts";
 import { type Hint, type KnownTerm, normalizeTerm, recoverHints, rewrite, stripAnsi } from "./markers.ts";
-import { KIND_LABEL, type OverlayResult, VocabOverlay } from "./overlay.ts";
+import { type OverlayResult, VocabOverlay } from "./overlay.ts";
 import { PROMPT_SECTION } from "./prompt.ts";
 import { pickCards, QuizOverlay, type QuizResult } from "./quiz.ts";
 import { Settings } from "./settings.ts";
@@ -221,7 +224,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("vocab", {
-		description: "Glossary of terms the agent explained. /vocab quiz [n] | toggle | forget <term>",
+		description: "Glossary of terms the agent explained. /vocab quiz [n] | export [path] | toggle | forget <term>",
 		handler: async (args, ctx) => {
 			const [sub, ...rest] = args.trim().split(/\s+/).filter(Boolean);
 			if (sub === "toggle" || sub === "on" || sub === "off") {
@@ -242,6 +245,17 @@ export default function (pi: ExtensionAPI) {
 			if (sub === "quiz") {
 				const n = Number.parseInt(rest[0] ?? "", 10);
 				return runQuiz(ctx, Number.isFinite(n) && n > 0 ? Math.min(n, 20) : 5);
+			}
+			if (sub === "export") {
+				// Writes GLOSSARY.md (or the given path) in the project. Refuses to clobber a file we did not write.
+				const target = resolve(ctx.cwd, rest.find((a) => a !== "--force") ?? "GLOSSARY.md");
+				const force = rest.includes("--force");
+				if (existsSync(target) && !force && !isOurs(readFileSync(target, "utf8"))) {
+					return ctx.ui.notify(`${target} exists and was not written by vocab. Add --force to overwrite.`, "warning");
+				}
+				if (glossary.size === 0) return ctx.ui.notify("nothing to export yet", "info");
+				writeFileSync(target, renderGlossary(glossary.all()));
+				return ctx.ui.notify(`wrote ${glossary.size} entries to ${target}`, "info");
 			}
 			if (sub === "count") return ctx.ui.notify(`${glossary.size} terms in this session`, "info");
 			await openOverlay(ctx, sub ? [sub, ...rest].join(" ") : undefined);

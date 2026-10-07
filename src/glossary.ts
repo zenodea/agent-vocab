@@ -10,6 +10,25 @@ export type Kind = (typeof KINDS)[number];
 
 export const isKind = (s: string): s is Kind => (KINDS as readonly string[]).includes(s);
 
+/** One character per kind for list rows. Terms get none. */
+export const KIND_GLYPH: Record<Kind, string> = {
+	term: "",
+	concept: "◇",
+	why: "?",
+	where: "@",
+	how: "›",
+	gotcha: "!",
+};
+
+export const KIND_LABEL: Record<Kind, string> = {
+	term: "term",
+	concept: "concept",
+	why: "why we do it this way",
+	where: "where it lives",
+	how: "how to do it",
+	gotcha: "gotcha",
+};
+
 export interface Entry {
 	kind: Kind;
 	/** Display spelling, as the model first wrote it. */

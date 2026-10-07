@@ -39,6 +39,7 @@ and the eight-row list never move, only the detail panel below grows.
 |---|---|
 | `/vocab` | Same as `alt+w`. |
 | `/vocab quiz [n]` | Five flashcards (or `n`) from this session's entries most likely to have slipped: looked up often, missed before, not seen for a while. Self-graded: `space` reveals, `y` got it, `n` missed. |
+| `/vocab export [path] [--force]` | Write the glossary as `GLOSSARY.md` in the project, grouped by kind, so other agents and teammates share the names. Refuses to overwrite a file it did not write unless `--force`. |
 | `/vocab toggle` | Stop or resume asking the model to mark terms. On by default. |
 | `/vocab forget <term>` | Remove a term from the glossary. |
 

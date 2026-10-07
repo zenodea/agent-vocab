@@ -7,8 +7,7 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, matchesKey } from "@earendil-works/pi-tui";
-import type { Entry } from "./glossary.ts";
-import { KIND_GLYPH, KIND_LABEL } from "./overlay.ts";
+import { type Entry, KIND_GLYPH, KIND_LABEL } from "./glossary.ts";
 import { clip, wrap } from "./text.ts";
 
 const DAY = 86_400_000;

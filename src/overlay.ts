@@ -5,29 +5,10 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, fuzzyFilter, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
-import type { Entry, Kind } from "./glossary.ts";
+import { type Entry, KIND_GLYPH, KIND_LABEL, type Kind } from "./glossary.ts";
 import type { Hint } from "./markers.ts";
 import { superscript } from "./markers.ts";
 import { clip, wrap } from "./text.ts";
-
-/** One character per kind, so a row stays one line. Terms get none. */
-export const KIND_GLYPH: Record<Kind, string> = {
-	term: "",
-	concept: "◇",
-	why: "?",
-	where: "@",
-	how: "›",
-	gotcha: "!",
-};
-
-export const KIND_LABEL: Record<Kind, string> = {
-	term: "term",
-	concept: "concept",
-	why: "why we do it this way",
-	where: "where it lives",
-	how: "how to do it",
-	gotcha: "gotcha",
-};
 
 export interface OverlayItem {
 	kind: Kind;
