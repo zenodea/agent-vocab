@@ -1,27 +1,39 @@
 /**
- * The glossary: every term the agent has ever marked, with its plain definition.
+ * The glossary: everything the agent has explained, with its plain definition.
  * One JSON file per user, shared across projects, so a term explained once in
  * one repo is still there when it shows up in another.
+ *
+ * Entries come in kinds. Terms and concepts are universal; why, where, how and
+ * gotcha belong to the project they were seen in.
  */
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
+export const KINDS = ["term", "concept", "why", "where", "how", "gotcha"] as const;
+export type Kind = (typeof KINDS)[number];
+
+/** Kinds that only make sense inside the project they came from. */
+export const PROJECT_KINDS: ReadonlySet<Kind> = new Set<Kind>(["why", "where", "how", "gotcha"]);
+
+export const isKind = (s: string): s is Kind => (KINDS as readonly string[]).includes(s);
+
 export interface Entry {
+	kind: Kind;
 	/** Display spelling, as the model first wrote it. */
 	term: string;
 	definition: string;
 	/** ISO timestamps. */
 	firstSeen: string;
 	lastSeen: string;
-	/** How many replies have marked this term. */
+	/** How many replies have marked this entry. */
 	count: number;
-	/** Working directories the term was seen in. */
+	/** Working directories the entry was seen in. */
 	projects: string[];
 }
 
 export interface GlossaryFile {
-	version: 1;
+	version: 2;
 	/** Whether the model is asked to mark terms at all. */
 	enabled: boolean;
 	terms: Record<string, Entry>;
@@ -29,7 +41,10 @@ export interface GlossaryFile {
 
 export const normalize = (term: string): string => term.trim().toLowerCase().replace(/\s+/g, " ");
 
-const empty = (): GlossaryFile => ({ version: 1, enabled: true, terms: {} });
+/** Storage key. Terms keep their bare name so version 1 files load unchanged. */
+export const keyOf = (kind: Kind, term: string): string => (kind === "term" ? normalize(term) : `${kind}:${normalize(term)}`);
+
+const empty = (): GlossaryFile => ({ version: 2, enabled: true, terms: {} });
 
 export class Glossary {
 	private data: GlossaryFile;
@@ -43,11 +58,13 @@ export class Glossary {
 	private static read(path: string): GlossaryFile {
 		try {
 			const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<GlossaryFile>;
-			return {
-				version: 1,
-				enabled: parsed.enabled !== false,
-				terms: parsed.terms && typeof parsed.terms === "object" ? parsed.terms : {},
-			};
+			const terms: Record<string, Entry> = {};
+			for (const [key, raw] of Object.entries(parsed.terms ?? {})) {
+				const entry = raw as Partial<Entry>;
+				if (!entry.term) continue;
+				terms[key] = { ...entry, kind: entry.kind && isKind(entry.kind) ? entry.kind : "term" } as Entry;
+			}
+			return { version: 2, enabled: parsed.enabled !== false, terms };
 		} catch {
 			return empty();
 		}
@@ -66,20 +83,25 @@ export class Glossary {
 		return Object.keys(this.data.terms).length;
 	}
 
-	get(term: string): Entry | undefined {
-		return this.data.terms[normalize(term)];
+	/** Exact kind when given; otherwise the term, then any other kind with that name. */
+	get(term: string, kind?: Kind): Entry | undefined {
+		if (kind) return this.data.terms[keyOf(kind, term)];
+		return this.data.terms[keyOf("term", term)] ?? KINDS.map((k) => this.data.terms[keyOf(k, term)]).find(Boolean);
 	}
 
-	all(): Entry[] {
-		return Object.values(this.data.terms).sort((a, b) => (a.lastSeen < b.lastSeen ? 1 : -1));
+	/** Every entry, most recent first. With `project`, project-scoped kinds are limited to it. */
+	all(project?: string): Entry[] {
+		return Object.values(this.data.terms)
+			.filter((e) => !project || !PROJECT_KINDS.has(e.kind) || e.projects.includes(project))
+			.sort((a, b) => (a.lastSeen < b.lastSeen ? 1 : -1));
 	}
 
 	/**
 	 * Record a sighting. A new definition replaces the old one only when the old
 	 * one is missing, so the first good explanation sticks.
 	 */
-	record(term: string, definition: string | undefined, project: string, now = new Date()): Entry {
-		const key = normalize(term);
+	record(term: string, definition: string | undefined, project: string, kind: Kind = "term", now = new Date()): Entry {
+		const key = keyOf(kind, term);
 		const iso = now.toISOString();
 		const existing = this.data.terms[key];
 		if (existing) {
@@ -90,6 +112,7 @@ export class Glossary {
 			return existing;
 		}
 		const entry: Entry = {
+			kind,
 			term: term.trim(),
 			definition: definition ?? "",
 			firstSeen: iso,
@@ -101,12 +124,18 @@ export class Glossary {
 		return entry;
 	}
 
-	forget(term: string): boolean {
-		const key = normalize(term);
-		if (!(key in this.data.terms)) return false;
-		delete this.data.terms[key];
-		this.save();
-		return true;
+	/** Remove an entry. Without a kind, removes every kind with that name. */
+	forget(term: string, kind?: Kind): boolean {
+		const keys = kind ? [keyOf(kind, term)] : KINDS.map((k) => keyOf(k, term));
+		let removed = false;
+		for (const key of keys) {
+			if (key in this.data.terms) {
+				delete this.data.terms[key];
+				removed = true;
+			}
+		}
+		if (removed) this.save();
+		return removed;
 	}
 
 	save(): void {

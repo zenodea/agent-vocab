@@ -5,12 +5,32 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, fuzzyFilter, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
-import type { Entry } from "./glossary.ts";
+import type { Entry, Kind } from "./glossary.ts";
 import type { Hint } from "./markers.ts";
 import { superscript } from "./markers.ts";
 import { clip, wrap } from "./text.ts";
 
+/** One character per kind, so a row stays one line. Terms get none. */
+export const KIND_GLYPH: Record<Kind, string> = {
+	term: "",
+	concept: "◇",
+	why: "?",
+	where: "@",
+	how: "›",
+	gotcha: "!",
+};
+
+export const KIND_LABEL: Record<Kind, string> = {
+	term: "term",
+	concept: "concept",
+	why: "why we do it this way",
+	where: "where it lives",
+	how: "how to do it",
+	gotcha: "gotcha",
+};
+
 export interface OverlayItem {
+	kind: Kind;
 	term: string;
 	definition: string;
 	/** Set for terms from the last reply. */
@@ -45,19 +65,22 @@ export class VocabOverlay implements Component {
 		this.done = done;
 		this.query = opts.initialQuery ?? "";
 		this.width = opts.width ?? 72;
-		for (const e of opts.glossary) this.byTerm.set(e.term.toLowerCase(), e);
+		for (const e of opts.glossary) this.byTerm.set(`${e.kind}:${e.term.toLowerCase()}`, e);
 	}
 
 	/** What the list shows right now: last-reply hints, or glossary matches when filtering. */
 	items(): OverlayItem[] {
 		if (this.query.trim()) {
 			const matches = fuzzyFilter(this.opts.glossary, this.query.trim(), (e) => e.term);
-			return matches.slice(0, MAX_ROWS).map((entry) => ({ term: entry.term, definition: entry.definition, entry }));
+			return matches
+				.slice(0, MAX_ROWS)
+				.map((entry) => ({ kind: entry.kind, term: entry.term, definition: entry.definition, entry }));
 		}
 		return this.opts.hints.map((h) => {
-			const entry = this.byTerm.get(h.term.toLowerCase());
+			const entry = this.byTerm.get(`${h.kind}:${h.term.toLowerCase()}`) ?? this.byTerm.get(`term:${h.term.toLowerCase()}`);
 			return {
 				index: h.index,
+				kind: entry?.kind ?? h.kind,
 				term: h.term,
 				definition: h.definition ?? entry?.definition ?? "",
 				entry,
@@ -142,10 +165,11 @@ export class VocabOverlay implements Component {
 			items.forEach((item, i) => {
 				const sel = i === this.selected;
 				const label = item.index ? `${item.index} ` : "· ";
+				const glyph = KIND_GLYPH[item.kind] ? t.fg("warning", `${KIND_GLYPH[item.kind]} `) : "";
 				const term = sel ? t.bold(t.fg("accent", item.term)) : t.bold(item.term);
-				const used = visibleWidth(label) + visibleWidth(item.term) + 3;
+				const used = visibleWidth(label) + visibleWidth(glyph) + visibleWidth(item.term) + 3;
 				const def = t.fg(sel ? "text" : "muted", clip(item.definition || "(no definition stored)", inner - used));
-				const text = `${t.fg(sel ? "accent" : "dim", label)}${term}  ${def}`;
+				const text = `${t.fg(sel ? "accent" : "dim", label)}${glyph}${term}  ${def}`;
 				const padded = text + " ".repeat(Math.max(0, inner - visibleWidth(text)));
 				lines.push(row(sel ? t.bg("selectedBg", padded) : padded));
 			});
@@ -155,7 +179,8 @@ export class VocabOverlay implements Component {
 		if (current) {
 			lines.push(border("├") + border("─".repeat(w - 2)) + border("┤"));
 			const head = `${t.bold(t.fg("accent", current.term))}${current.index ? t.fg("dim", superscript(current.index)) : ""}`;
-			lines.push(row(head));
+			const kind = current.kind === "term" ? "" : t.fg("warning", `  ${KIND_GLYPH[current.kind]} ${KIND_LABEL[current.kind]}`);
+			lines.push(row(head + kind));
 			const def = current.definition || "No definition stored. Ask the agent what it means.";
 			for (const l of wrap(def, inner)) lines.push(row(l));
 			if (current.entry) {

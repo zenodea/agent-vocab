@@ -6,8 +6,8 @@ test("rewrite turns markers into numbered bold terms", () => {
 	const r = rewrite("A [[closure|a function that remembers its surroundings]] uses [[scope|where names are visible]].");
 	assert.equal(r.text, "A **closure**¹ uses **scope**².");
 	assert.deepEqual(r.hints, [
-		{ index: 1, term: "closure", definition: "a function that remembers its surroundings" },
-		{ index: 2, term: "scope", definition: "where names are visible" },
+		{ index: 1, kind: "term", term: "closure", definition: "a function that remembers its surroundings" },
+		{ index: 2, kind: "term", term: "scope", definition: "where names are visible" },
 	]);
 });
 
@@ -20,7 +20,7 @@ test("a term seen twice keeps one number", () => {
 test("bare marker without definition still gets a hint", () => {
 	const r = rewrite("Use a [[thunk]].");
 	assert.equal(r.text, "Use a **thunk**¹.");
-	assert.deepEqual(r.hints, [{ index: 1, term: "thunk", definition: undefined }]);
+	assert.deepEqual(r.hints, [{ index: 1, kind: "term", term: "thunk", definition: undefined }]);
 });
 
 test("numbering continues across messages and known terms reuse numbers", () => {
@@ -52,14 +52,17 @@ test("a late definition fills a term first seen bare", () => {
 });
 
 test("findMarkers reads without rewriting", () => {
-	assert.deepEqual(findMarkers("x [[a|b]] y [[c]]"), [{ term: "a", definition: "b" }, { term: "c", definition: undefined }]);
+	assert.deepEqual(findMarkers("x [[a|b]] y [[c]]"), [
+		{ kind: "term", term: "a", definition: "b" },
+		{ kind: "term", term: "c", definition: undefined },
+	]);
 });
 
 test("recoverHints reads numbers back out of rendered text", () => {
 	const r = rewrite("[[alpha|one]] [[beta|two]] [[alpha]]");
 	assert.deepEqual(recoverHints(r.text), [
-		{ index: 1, term: "alpha" },
-		{ index: 2, term: "beta" },
+		{ index: 1, kind: "term", term: "alpha" },
+		{ index: 2, kind: "term", term: "beta" },
 	]);
 });
 
@@ -75,8 +78,8 @@ test("every plain repeat of a marked term gets the same number", () => {
 
 test("glossary terms mentioned without markers get numbered too", () => {
 	const r = rewrite("Guard it with a mutex, or you get a race condition.", 1, new Map(), [
-		{ term: "race condition", definition: "two threads racing" },
-		{ term: "mutex", definition: "a lock" },
+		{ kind: "term", term: "race condition", definition: "two threads racing" },
+		{ kind: "term", term: "mutex", definition: "a lock" },
 	]);
 	assert.equal(r.text, "Guard it with a **mutex**¹, or you get a **race condition**².");
 	assert.deepEqual(r.hints.map((h) => [h.index, h.term, h.definition]), [
@@ -94,6 +97,30 @@ test("highlight pass skips inline code, links, urls and partial words", () => {
 });
 
 test("marker terms take the low numbers, glossary mentions follow", () => {
-	const r = rewrite("scope first, then [[closure|c]].", 1, new Map(), [{ term: "scope", definition: "s" }]);
+	const r = rewrite("scope first, then [[closure|c]].", 1, new Map(), [{ kind: "term", term: "scope", definition: "s" }]);
 	assert.equal(r.text, "**scope**² first, then **closure**¹.");
+});
+
+test("kind prefixes are parsed and rendered like terms", () => {
+	const r = rewrite("[[why: SQLite|single-user app]] and [[gotcha: seeding|migrate first]] and [[concept: auth here|cookie token]].");
+	assert.equal(r.text, "**SQLite**¹ and **seeding**² and **auth here**³.");
+	assert.deepEqual(r.hints.map((h) => [h.kind, h.term, h.definition]), [
+		["why", "SQLite", "single-user app"],
+		["gotcha", "seeding", "migrate first"],
+		["concept", "auth here", "cookie token"],
+	]);
+});
+
+test("an unknown prefix stays part of the name", () => {
+	const r = rewrite("[[note: thing|d]]");
+	assert.equal(r.text, "**note: thing**¹");
+	assert.equal(r.hints[0]!.kind, "term");
+});
+
+test("project kinds in the glossary are not auto-numbered, concepts are", () => {
+	const r = rewrite("Run the tests after auth here is set up.", 1, new Map(), [
+		{ kind: "how", term: "tests", definition: "make test" },
+		{ kind: "concept", term: "auth here", definition: "cookie token" },
+	]);
+	assert.equal(r.text, "Run the tests after **auth here**¹ is set up.");
 });

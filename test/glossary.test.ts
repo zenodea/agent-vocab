@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -13,8 +13,8 @@ test("normalize folds case and whitespace", () => {
 
 test("record creates, then counts repeat sightings", () => {
 	const g = fresh();
-	const a = g.record("Closure", "a function that remembers its surroundings", "/p1", new Date("2026-01-01"));
-	const b = g.record("closure", undefined, "/p2", new Date("2026-01-02"));
+	const a = g.record("Closure", "a function that remembers its surroundings", "/p1", "term", new Date("2026-01-01"));
+	const b = g.record("closure", undefined, "/p2", "term", new Date("2026-01-02"));
 	assert.equal(a, b);
 	assert.equal(b.count, 2);
 	assert.equal(b.term, "Closure");
@@ -40,7 +40,7 @@ test("save round-trips through disk and keeps enabled flag", () => {
 	const again = new Glossary(path);
 	assert.equal(again.enabled, false);
 	assert.equal(again.get("MUTEX")?.definition, "a lock so only one thing touches shared data at a time");
-	assert.ok(readFileSync(path, "utf8").includes('"version": 1'));
+	assert.ok(readFileSync(path, "utf8").includes('"version": 2'));
 });
 
 test("forget removes and reports", () => {
@@ -53,8 +53,30 @@ test("forget removes and reports", () => {
 
 test("all sorts most recent first", () => {
 	const g = fresh();
-	g.record("A", "a", "/p", new Date("2026-01-01"));
-	g.record("B", "b", "/p", new Date("2026-01-03"));
-	g.record("C", "c", "/p", new Date("2026-01-02"));
+	g.record("A", "a", "/p", "term", new Date("2026-01-01"));
+	g.record("B", "b", "/p", "term", new Date("2026-01-03"));
+	g.record("C", "c", "/p", "term", new Date("2026-01-02"));
 	assert.deepEqual(g.all().map((e) => e.term), ["B", "C", "A"]);
+});
+
+test("kinds are stored apart and project kinds are scoped", () => {
+	const g = fresh();
+	g.record("SQLite", "a file database", "/p1");
+	g.record("SQLite", "single-user app", "/p1", "why");
+	g.record("tests", "make test", "/p2", "how");
+	assert.equal(g.get("sqlite")?.kind, "term");
+	assert.equal(g.get("sqlite", "why")?.definition, "single-user app");
+	assert.deepEqual(g.all("/p1").map((e) => e.term).sort(), ["SQLite", "SQLite"]);
+	assert.deepEqual(g.all("/p2").map((e) => e.term).sort(), ["SQLite", "tests"]);
+	assert.equal(g.all().length, 3);
+	assert.equal(g.forget("sqlite"), true);
+	assert.equal(g.all().length, 1);
+});
+
+test("version 1 files load as terms", () => {
+	const dir = mkdtempSync(join(tmpdir(), "vocab-"));
+	const path = join(dir, "vocab.json");
+	writeFileSync(path, JSON.stringify({ version: 1, enabled: true, terms: { closure: { term: "closure", definition: "d", firstSeen: "x", lastSeen: "x", count: 1, projects: [] } } }));
+	const g = new Glossary(path);
+	assert.equal(g.get("closure")?.kind, "term");
 });

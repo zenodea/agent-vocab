@@ -8,8 +8,10 @@
  *   /vocab toggle  stop or resume asking the model to mark terms (on by default)
  *   /vocab forget <term>
  *
- * The model writes [[term|definition]]; message_end turns that into **term**¹
- * and stores the definition in ~/.pi/agent/vocab.json.
+ * The model writes [[term|definition]] or [[kind: name|definition]] for a
+ * concept, why, where, how or gotcha; message_end turns that into **name**¹ and
+ * stores the definition in ~/.pi/agent/vocab.json. Terms and concepts are
+ * global; the other kinds only show inside the project they came from.
  */
 
 import { join } from "node:path";
@@ -67,7 +69,10 @@ export default function (pi: ExtensionAPI) {
 				.join("\n");
 			const recovered = recoverHints(text);
 			if (recovered.length === 0) continue;
-			hints = recovered.map((h) => ({ ...h, definition: glossary.get(h.term)?.definition }));
+			hints = recovered.map((h) => {
+				const entry = glossary.get(h.term);
+				return { ...h, kind: entry?.kind ?? "term", definition: entry?.definition };
+			});
 			for (const h of hints) known.set(h.term.toLowerCase(), h);
 			break;
 		}
@@ -92,7 +97,9 @@ export default function (pi: ExtensionAPI) {
 		let changed = false;
 		// Every known term is a candidate, so a repeat from an earlier reply is
 		// numbered even when the model forgot to mark it.
-		const candidates = glossary.all().map((e) => ({ term: e.term, definition: e.definition || undefined }));
+		const candidates = glossary
+			.all(ctx.cwd)
+			.map((e) => ({ kind: e.kind, term: e.term, definition: e.definition || undefined }));
 		const content = msg.content.map((block) => {
 			if (block.type !== "text" || !block.text.trim()) return block;
 			const result = rewrite(block.text, hints.length + 1, known, candidates);
@@ -100,9 +107,9 @@ export default function (pi: ExtensionAPI) {
 			changed = true;
 			for (const h of result.hints) {
 				hints.push(h);
-				const entry = glossary.record(h.term, h.definition, ctx.cwd);
+				const entry = glossary.record(h.term, h.definition, ctx.cwd, h.kind);
 				if (!h.definition) h.definition = entry.definition || undefined;
-				candidates.push({ term: entry.term, definition: entry.definition || undefined });
+				candidates.push({ kind: entry.kind, term: entry.term, definition: entry.definition || undefined });
 			}
 			return { ...block, text: result.text };
 		});
