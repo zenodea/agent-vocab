@@ -56,12 +56,17 @@ export interface OverlayOptions {
 	width?: number;
 }
 
-const MAX_ROWS = 9;
+/** Rows the list always occupies, so the search box and list never move. */
+export const LIST_ROWS = 8;
+/** Rows a ctrl+d / ctrl+u jump moves, vim style. */
+const HALF_PAGE = Math.ceil(LIST_ROWS / 2);
 
 export class VocabOverlay implements Component {
 	focused = false;
 	private query: string;
 	private selected = 0;
+	/** Index of the first visible list row. */
+	private scroll = 0;
 	private readonly width: number;
 	private readonly byTerm = new Map<string, Entry>();
 
@@ -107,18 +112,13 @@ export class VocabOverlay implements Component {
 		if (q && this.numberMode()) {
 			const exact = this.opts.hints.filter((h) => String(h.index) === q);
 			const rest = this.opts.hints.filter((h) => String(h.index) !== q && String(h.index).startsWith(q));
-			return [...exact, ...rest.sort((a, b) => b.index - a.index)].slice(0, MAX_ROWS).map((h) => this.hintItem(h));
+			return [...exact, ...rest.sort((a, b) => b.index - a.index)].map((h) => this.hintItem(h));
 		}
 		if (q) {
 			const matches = fuzzyFilter(this.opts.glossary, q, (e) => e.term);
-			return matches
-				.slice(0, MAX_ROWS)
-				.map((entry) => ({ kind: entry.kind, term: entry.term, definition: entry.definition, related: entry.related, entry }));
+			return matches.map((entry) => ({ kind: entry.kind, term: entry.term, definition: entry.definition, related: entry.related, entry }));
 		}
-		return [...this.opts.hints]
-			.sort((a, b) => b.index - a.index)
-			.slice(0, MAX_ROWS)
-			.map((h) => this.hintItem(h));
+		return [...this.opts.hints].sort((a, b) => b.index - a.index).map((h) => this.hintItem(h));
 	}
 
 	/** Remember that the user deliberately landed on the current item. */
@@ -138,6 +138,16 @@ export class VocabOverlay implements Component {
 	private clampSelection(items: OverlayItem[]): void {
 		if (items.length === 0) this.selected = 0;
 		else this.selected = Math.min(Math.max(0, this.selected), items.length - 1);
+		// Keep the selection inside the visible window.
+		if (this.selected < this.scroll) this.scroll = this.selected;
+		if (this.selected >= this.scroll + LIST_ROWS) this.scroll = this.selected - LIST_ROWS + 1;
+		this.scroll = Math.max(0, Math.min(this.scroll, Math.max(0, items.length - LIST_ROWS)));
+	}
+
+	private move(delta: number): void {
+		this.selected += delta;
+		this.clampSelection(this.items());
+		this.markViewed();
 	}
 
 	handleInput(data: string): void {
@@ -157,18 +167,14 @@ export class VocabOverlay implements Component {
 			this.finish("explain");
 			return;
 		}
-		if (matchesKey(data, "up") || matchesKey(data, "ctrl+p") || matchesKey(data, "ctrl+k")) {
-			this.selected -= 1;
-			this.clampSelection(this.items());
-			this.markViewed();
-			return;
-		}
-		if (matchesKey(data, "down") || matchesKey(data, "ctrl+n") || matchesKey(data, "ctrl+j")) {
-			this.selected += 1;
-			this.clampSelection(this.items());
-			this.markViewed();
-			return;
-		}
+		if (matchesKey(data, "up") || matchesKey(data, "ctrl+p") || matchesKey(data, "ctrl+k")) return this.move(-1);
+		if (matchesKey(data, "down") || matchesKey(data, "ctrl+n") || matchesKey(data, "ctrl+j")) return this.move(1);
+		if (matchesKey(data, "ctrl+u")) return this.move(-HALF_PAGE);
+		if (matchesKey(data, "ctrl+d")) return this.move(HALF_PAGE);
+		if (matchesKey(data, "pageUp")) return this.move(-LIST_ROWS);
+		if (matchesKey(data, "pageDown")) return this.move(LIST_ROWS);
+		if (matchesKey(data, "home")) return this.move(-Infinity);
+		if (matchesKey(data, "end")) return this.move(Infinity);
 		// tab follows the first link of the selected entry.
 		if (matchesKey(data, "tab")) {
 			const current = this.items()[this.selected];
@@ -176,6 +182,7 @@ export class VocabOverlay implements Component {
 			if (target) {
 				this.query = target;
 				this.selected = 0;
+				this.scroll = 0;
 				this.markViewed();
 			}
 			return;
@@ -183,16 +190,13 @@ export class VocabOverlay implements Component {
 		if (matchesKey(data, "backspace")) {
 			this.query = this.query.slice(0, -1);
 			this.selected = 0;
-			return;
-		}
-		if (matchesKey(data, "ctrl+u")) {
-			this.query = "";
-			this.selected = 0;
+			this.scroll = 0;
 			return;
 		}
 		if (data.length >= 1 && !/[\x00-\x1f\x7f]/.test(data)) {
 			this.query += data;
 			this.selected = 0;
+			this.scroll = 0;
 			// A number that lands on a hint, or a filter down to one hit, counts as finding it.
 			const items = this.items();
 			if ((this.numberMode() && items[0] && String(items[0].index) === this.query.trim()) || items.length === 1) {
@@ -222,7 +226,18 @@ export class VocabOverlay implements Component {
 		lines.push(row(`${t.fg("accent", ">")} ${prompt}${t.fg("accent", "▏")}`));
 		lines.push(border("├") + border("─".repeat(w - 2)) + border("┤"));
 
-		if (items.length === 0) {
+		// The list window: always LIST_ROWS tall, so nothing above or below it moves.
+		const total = items.length;
+		const first = this.scroll;
+		const last = Math.min(total, first + LIST_ROWS);
+		const range = total > LIST_ROWS ? t.fg("dim", `  ${first + 1}-${last} of ${total}`) : total > 0 ? t.fg("dim", `  ${total}`) : "";
+		const heading = filtering
+			? this.numberMode()
+				? `hint ${this.query.trim()}`
+				: "glossary matches"
+			: "this session, newest first";
+		lines.push(row(t.fg("muted", heading) + range));
+		if (total === 0) {
 			const msg = filtering
 				? this.numberMode()
 					? `no hint ${this.query.trim()} in this session`
@@ -231,24 +246,20 @@ export class VocabOverlay implements Component {
 					? "nothing yet: terms appear here as the agent explains them"
 					: "no terms in this session yet";
 			lines.push(row(t.fg("muted", msg)));
-		} else {
-			if (!filtering) {
-				const total = this.opts.hints.length;
-				const more = total > items.length ? t.fg("dim", `  ${total - items.length} more, type a number`) : "";
-				lines.push(row(t.fg("muted", "this session, newest first") + more));
-			}
-			items.forEach((item, i) => {
-				const sel = i === this.selected;
-				const label = item.index ? `${item.index} `.padStart(3) : " · ";
-				const glyph = KIND_GLYPH[item.kind] ? t.fg("warning", `${KIND_GLYPH[item.kind]} `) : "";
-				const term = sel ? t.bold(t.fg("accent", item.term)) : t.bold(item.term);
-				const used = visibleWidth(label) + visibleWidth(glyph) + visibleWidth(item.term) + 3;
-				const def = t.fg(sel ? "text" : "muted", clip(item.definition || "(no definition stored)", inner - used));
-				const text = `${t.fg(sel ? "accent" : "dim", label)}${glyph}${term}  ${def}`;
-				const padded = text + " ".repeat(Math.max(0, inner - visibleWidth(text)));
-				lines.push(row(sel ? t.bg("selectedBg", padded) : padded));
-			});
 		}
+		for (let i = first; i < last; i++) {
+			const item = items[i]!;
+			const sel = i === this.selected;
+			const label = item.index ? `${item.index} `.padStart(3) : " · ";
+			const glyph = KIND_GLYPH[item.kind] ? t.fg("warning", `${KIND_GLYPH[item.kind]} `) : "";
+			const term = sel ? t.bold(t.fg("accent", item.term)) : t.bold(item.term);
+			const used = visibleWidth(label) + visibleWidth(glyph) + visibleWidth(item.term) + 3;
+			const def = t.fg(sel ? "text" : "muted", clip(item.definition || "(no definition stored)", inner - used));
+			const text = `${t.fg(sel ? "accent" : "dim", label)}${glyph}${term}  ${def}`;
+			const padded = text + " ".repeat(Math.max(0, inner - visibleWidth(text)));
+			lines.push(row(sel ? t.bg("selectedBg", padded) : padded));
+		}
+		for (let i = Math.max(last - first, total === 0 ? 1 : 0); i < LIST_ROWS; i++) lines.push(blank);
 
 		const current = items[this.selected];
 		if (current) {
@@ -267,7 +278,7 @@ export class VocabOverlay implements Component {
 		const hasLink = (current?.related.length ?? 0) > 0;
 		const tabHint = hasLink ? " · tab link" : "";
 		const explain = current ? " · ^e explain again" : "";
-		lines.push(row(t.fg("dim", filtering ? `↑↓ move · backspace edit${tabHint}${explain} · esc` : `number pick · ↑↓ · type to search${tabHint}${explain} · esc`)));
+		lines.push(row(t.fg("dim", filtering ? `↑↓ ^d ^u scroll · backspace${tabHint}${explain} · esc` : `number or word · ↑↓ ^d ^u scroll${tabHint}${explain} · esc`)));
 		lines.push(border("╰") + border("─".repeat(w - 2)) + border("╯"));
 		return lines;
 	}

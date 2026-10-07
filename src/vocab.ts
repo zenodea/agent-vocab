@@ -89,7 +89,8 @@ export default function (pi: ExtensionAPI) {
 			result = await ctx.ui.custom<OverlayResult>(
 				(_tui, theme, _keys, done) =>
 					new VocabOverlay(theme, { hints: hints(), glossary: glossary.all(), initialQuery, width: 72 }, done),
-				{ overlay: true, overlayOptions: { width: "80%", maxHeight: "80%", anchor: "center", minWidth: 40 } },
+				// Anchored at the top: the search box and list stay put, details grow downward.
+				{ overlay: true, overlayOptions: { width: "80%", maxHeight: "90%", anchor: "top-center", row: 2, minWidth: 40 } },
 			);
 		} finally {
 			overlayOpen = false;

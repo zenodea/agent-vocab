@@ -23,10 +23,13 @@ Or for a checkout you want to hack on:
 | `alt+w` | Open or close the glossary. Typing a number picks that hint. Typing a word filters the whole glossary. `esc` closes. |
 | `alt+shift+w` | Look up whatever is typed in the input box, without sending it. |
 
-Inside the glossary:
+Inside the glossary. The box sits at the top of the screen; the search line
+and the eight-row list never move, only the detail panel below grows.
 
 | Key | Does |
 |---|---|
+| `↑` `↓` | Move one entry. |
+| `ctrl+d` `ctrl+u` | Half a page down or up. `pageDown` `pageUp` a full page, `home` `end` to the ends. |
 | `ctrl+e` | Ask the agent to explain the selected entry again, plainly, with an example from this project. |
 | `tab` | Follow the first link of the selected entry (see: ...). |
 
