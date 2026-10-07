@@ -9,6 +9,7 @@
     "extensions": ["./src/vocab.ts"]
   },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "typecheck": "sh scripts/typecheck.sh"
   }
 }
