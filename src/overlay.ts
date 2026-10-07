@@ -261,13 +261,6 @@ export class VocabOverlay implements Component {
 			if (current.related.length) {
 				lines.push(row(t.fg("dim", "see: ") + t.fg("accent", clip(current.related.join(", "), inner - 5))));
 			}
-			if (current.entry) {
-				const e = current.entry;
-				const times = e.count === 1 ? "seen once" : `seen ${e.count} times`;
-				const where = e.projects.length ? `, first in ${e.projects[0]!.split("/").pop() ?? e.projects[0]}` : "";
-				const looked = e.lookups >= 2 ? t.fg("warning", ` · looked up ${e.lookups}×`) : "";
-				lines.push(row(t.fg("dim", `${times}${where}`) + looked));
-			}
 		}
 
 		lines.push(blank);
