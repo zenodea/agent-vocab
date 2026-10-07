@@ -22,7 +22,7 @@
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Glossary, type GlossaryData } from "./glossary.ts";
-import { type Hint, type KnownTerm, normalizeTerm, recoverHints, rewrite } from "./markers.ts";
+import { type Hint, type KnownTerm, normalizeTerm, recoverHints, rewrite, stripAnsi } from "./markers.ts";
 import { KIND_LABEL, type OverlayResult, VocabOverlay } from "./overlay.ts";
 import { PROMPT_SECTION } from "./prompt.ts";
 import { pickCards, QuizOverlay, type QuizResult } from "./quiz.ts";
@@ -146,6 +146,18 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 		showStatus(ctx);
+	});
+
+	// The underline styling is raw ANSI. The screen keeps it; the model gets clean text.
+	pi.on("context", async (event) => {
+		let changed = false;
+		const messages = event.messages.map((m) => {
+			if (m.role !== "assistant") return m;
+			if (!m.content.some((c) => isText(c) && c.text.includes("\x1b["))) return m;
+			changed = true;
+			return { ...m, content: m.content.map((c) => (isText(c) ? { ...c, text: stripAnsi(c.text) } : c)) };
+		});
+		return changed ? { messages } : undefined;
 	});
 
 	pi.on("before_agent_start", async (event) => {

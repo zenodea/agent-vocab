@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { findMarkers, fromSuperscript, recoverHints, rewrite, superscript } from "../src/markers.ts";
+import { findMarkers, fromSuperscript, recoverHints, rewrite, stripAnsi, styleName, superscript } from "../src/markers.ts";
 
 test("rewrite turns markers into numbered bold terms", () => {
 	const r = rewrite("A [[closure|a function that remembers its surroundings]] uses [[scope|where names are visible]].");
@@ -51,7 +51,7 @@ test("streaming hides an unfinished marker until its name is complete", () => {
 	const known = new Map();
 	assert.equal(rewrite("A [[clo", 1, known, [], { streaming: true }).text, "A ");
 	assert.equal(rewrite("A [[closure|a func", 1, known, [], { streaming: true }).text, "A **closure**");
-	assert.equal(rewrite("A [[concept: auth here|a tok", 1, known, [], { streaming: true }).text, "A **auth here**");
+	assert.equal(rewrite("A [[concept: auth here|a tok", 1, known, [], { streaming: true }).text, "A ***auth here***");
 	assert.equal(rewrite("A [[closure|a function]] is", 1, known, [], { streaming: true }).text, "A **closure**¹ is");
 	assert.equal(known.size, 1);
 });
@@ -124,7 +124,8 @@ test("marker terms take the low numbers, glossary mentions follow", () => {
 
 test("kind prefixes are parsed and rendered like terms", () => {
 	const r = rewrite("[[why: SQLite|single-user app]] and [[gotcha: seeding|migrate first]] and [[concept: auth here|cookie token]].");
-	assert.equal(r.text, "**SQLite**¹ and **seeding**² and **auth here**³.");
+	assert.equal(r.text, `${styleName("why", "SQLite")}¹ and ${styleName("gotcha", "seeding")}² and ***auth here***³.`);
+	assert.equal(stripAnsi(r.text), "**SQLite**¹ and **seeding**² and ***auth here***³.");
 	assert.deepEqual(r.hints.map((h) => [h.kind, h.term, h.definition]), [
 		["why", "SQLite", "single-user app"],
 		["gotcha", "seeding", "migrate first"],
@@ -143,7 +144,7 @@ test("project kinds in the glossary are not auto-numbered, concepts are", () => 
 		{ kind: "how", term: "tests", definition: "make test" },
 		{ kind: "concept", term: "auth here", definition: "cookie token" },
 	]);
-	assert.equal(r.text, "Run the tests after **auth here**¹ is set up.");
+	assert.equal(r.text, "Run the tests after ***auth here***¹ is set up.");
 });
 
 test("a see: segment becomes related links and stays out of the definition", () => {
@@ -159,4 +160,15 @@ test("superscript round-trips", () => {
 	assert.equal(superscript(23), "²³");
 	assert.equal(fromSuperscript("²³"), 23);
 	assert.equal(fromSuperscript("x"), 0);
+});
+
+test("styled hints are recovered and protected from re-marking", () => {
+	const r = rewrite("[[gotcha: seeding|migrate first]] then [[concept: auth|token]] then seeding again.");
+	assert.deepEqual(recoverHints(r.text), [
+		{ index: 1, kind: "term", term: "seeding" },
+		{ index: 2, kind: "term", term: "auth" },
+	]);
+	// A second pass over already-styled text changes nothing.
+	const again = rewrite(r.text, 1, new Map(), [{ kind: "gotcha", term: "seeding", definition: "x" }]);
+	assert.equal(again.text, r.text);
 });

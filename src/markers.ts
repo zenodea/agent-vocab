@@ -52,6 +52,39 @@ export interface KnownTerm {
 
 const SUPERSCRIPT_DIGITS = ["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
 
+// Raw ANSI that pi's markdown renderer passes through untouched.
+const UNDERLINE = "\x1b[4m";
+const CURLY = "\x1b[4:3m";
+const UNDERLINE_OFF = "\x1b[24m";
+
+/** Any SGR sequence, for stripping before text reaches the model. */
+export const ANSI = /\x1b\[[0-9;:]*m/g;
+export const stripAnsi = (s: string): string => s.replace(ANSI, "");
+
+/**
+ * How a hinted name looks in the reply, per kind. Bold is markdown; the
+ * underlines are raw ANSI, stripped again before the model sees the text.
+ *
+ *   term     **name**
+ *   concept  ***name***            bold italic
+ *   why/where/how  **name** underlined
+ *   gotcha   **name** curly underline
+ */
+export function styleName(kind: Kind, name: string): string {
+	switch (kind) {
+		case "concept":
+			return `***${name}***`;
+		case "gotcha":
+			return `**${CURLY}${name}${UNDERLINE_OFF}**`;
+		case "why":
+		case "where":
+		case "how":
+			return `**${UNDERLINE}${name}${UNDERLINE_OFF}**`;
+		default:
+			return `**${name}**`;
+	}
+}
+
 /** 12 → ¹². Numbers are per session, so they can grow past nine. */
 export const superscript = (n: number): string =>
 	n > 0 ? String(n).split("").map((d) => SUPERSCRIPT_DIGITS[Number(d)] ?? "").join("") : "";
@@ -74,7 +107,7 @@ const MARKER = /\[\[(?:([a-z]+):\s*)?([^\[\]|\n]+?)(?:\|([^\[\]\n]+?))?\]\]/g;
 const FENCE = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?\n\2[ \t]*(?=\n|$)/g;
 
 // Spans the highlight pass must not touch: inline code, links, existing hints.
-const PROTECTED = /`[^`\n]*`|\*\*[^*\n]+\*\*[⁰¹²³⁴⁵⁶⁷⁸⁹]*|\[[^\]\n]*\]\([^)\n]*\)|https?:\/\/\S+/g;
+const PROTECTED = /`[^`\n]*`|\*{2,3}[^*\n]+\*{2,3}[⁰¹²³⁴⁵⁶⁷⁸⁹]*|\[[^\]\n]*\]\([^)\n]*\)|https?:\/\/\S+/g;
 
 // While streaming, an unfinished marker at the very end of the text.
 const OPEN_MARKER = /\[\[(?:([a-z]+):\s*)?([^\[\]|\n]*)(?:\|([^\[\]\n]*))?$/;
@@ -166,7 +199,8 @@ export function rewrite(
 		if (open && !text.slice(open.index).includes("]]")) {
 			const name = open[2]?.trim();
 			// Name complete once the "|" has arrived; before that show nothing.
-			tail = open[3] !== undefined && name ? `**${name}**` : "";
+			const kind = open[1] && isKind(open[1]) ? open[1] : "term";
+			tail = open[3] !== undefined && name ? styleName(kind, name) : "";
 			text = text.slice(0, open.index);
 		}
 	}
@@ -190,7 +224,7 @@ export function rewrite(
 				if (!hint.definition && marker.definition) hint.definition = marker.definition;
 				if (marker.related) hint.related = [...new Set([...(hint.related ?? []), ...marker.related])];
 			}
-			return `**${marker.term}**${superscript(hint.index)}`;
+			return `${styleName(hint.kind, marker.term)}${superscript(hint.index)}`;
 		});
 
 	// Plain mentions of known or glossary names, outside protected spans.
@@ -211,7 +245,7 @@ export function rewrite(
 					known.set(base, hint);
 					hints.push(hint);
 				}
-				return `**${word}**${superscript(hint.index)}`;
+				return `${styleName(hint.kind, word)}${superscript(hint.index)}`;
 			});
 		let out = "";
 		let last = 0;
@@ -244,9 +278,9 @@ export function rewrite(
  */
 export function recoverHints(text: string): Hint[] {
 	const found = new Map<number, Hint>();
-	for (const m of text.matchAll(/\*\*([^*\n]+?)\*\*([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g)) {
+	for (const m of text.matchAll(/\*{2,3}([^*\n]+?)\*{2,3}([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g)) {
 		const index = fromSuperscript(m[2]!);
-		if (index > 0 && !found.has(index)) found.set(index, { index, kind: "term", term: m[1]!.trim() });
+		if (index > 0 && !found.has(index)) found.set(index, { index, kind: "term", term: stripAnsi(m[1]!).trim() });
 	}
 	return [...found.values()].sort((a, b) => a.index - b.index);
 }

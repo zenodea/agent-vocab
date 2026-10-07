@@ -41,17 +41,22 @@ Inside the glossary:
 
 ## Kinds
 
-Everything renders the same way in the reply, `**name**` plus a number, so the
-screen does not get busier. The glossary shows a glyph per kind.
+Every kind renders as the name plus a number, so the reply does not get
+busier, but the name's style says which kind it is. The glossary adds a glyph.
 
-| Kind | Answers | Glyph |
-|---|---|---|
-| term | what is this called | |
-| concept | how does this work | `◇` |
-| why | why did we do it this way | `?` |
-| where | where does this live | `@` |
-| how | how do I do this again | `›` |
-| gotcha | what bit us before | `!` |
+| Kind | Answers | In the reply | Glyph |
+|---|---|---|---|
+| term | what is this called | **bold** | |
+| concept | how does this work | ***bold italic*** | `◇` |
+| why | why did we do it this way | bold, underlined | `?` |
+| where | where does this live | bold, underlined | `@` |
+| how | how do I do this again | bold, underlined | `›` |
+| gotcha | what bit us before | bold, curly underline | `!` |
+
+The underlines are raw terminal codes that pi's markdown renderer passes
+through. A `context` hook strips them before each model call, so the model sees
+plain `**name**`. Terminals without curly underline support show a plain one or
+nothing; the number is always there.
 
 Entries can link to each other (`see: scope, callback`). Links go both ways.
 Every time you open an entry in the glossary it counts as a lookup; entries you
