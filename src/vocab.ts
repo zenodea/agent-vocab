@@ -45,14 +45,21 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus("vocab", n > 0 ? ctx.ui.theme.fg("accent", `vocab ${n}`) : undefined);
 	};
 
-	const openOverlay = async (ctx: ExtensionContext, initialQuery?: string) => {
-		if (!ctx.hasUI) return;
-		await ctx.ui.custom<undefined>(
-			(_tui, theme, _keys, done) =>
-				new VocabOverlay(theme, { hints, glossary: glossary.all(), initialQuery, width: 72 }, done),
-			{ overlay: true, overlayOptions: { width: "80%", maxHeight: "80%", anchor: "center", minWidth: 40 } },
-		);
+	let overlayOpen = false;
+	const openOverlay = async (ctx: ExtensionContext, initialQuery?: string, initialIndex?: number) => {
+		if (!ctx.hasUI || overlayOpen) return;
+		overlayOpen = true;
+		try {
+			await ctx.ui.custom<undefined>(
+				(_tui, theme, _keys, done) =>
+					new VocabOverlay(theme, { hints, glossary: glossary.all(), initialQuery, initialIndex, width: 72 }, done),
+				{ overlay: true, overlayOptions: { width: "80%", maxHeight: "80%", anchor: "center", minWidth: 40 } },
+			);
+		} finally {
+			overlayOpen = false;
+		}
 	};
+
 
 	// On resume, find the last assistant reply and read its hint numbers back.
 	pi.on("session_start", async (_event, ctx) => {
@@ -112,6 +119,21 @@ export default function (pi: ExtensionAPI) {
 		description: "vocab: open the glossary for the last reply",
 		handler: (ctx) => openOverlay(ctx),
 	});
+
+	// alt+N jumps straight to term N of the last reply. ctrl+N does the same in
+	// terminals that speak the kitty keyboard protocol; legacy terminals cannot
+	// tell ctrl+1 from a plain 1, so alt is the one that works everywhere.
+	for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9] as const) {
+		const handler = (ctx: ExtensionContext) => {
+			if (!hints.some((h) => h.index === n)) {
+				ctx.ui.notify(hints.length ? `no term ${n} in the last reply (only ${hints.length})` : "no terms in the last reply", "info");
+				return;
+			}
+			return openOverlay(ctx, undefined, n);
+		};
+		pi.registerShortcut(`alt+${n}`, { description: `vocab: show term ${n} of the last reply`, handler });
+		pi.registerShortcut(`ctrl+${n}`, { description: `vocab: show term ${n} of the last reply`, handler });
+	}
 
 	pi.registerShortcut("alt+shift+w", {
 		description: "vocab: look up the word in the input box",
