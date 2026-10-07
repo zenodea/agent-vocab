@@ -25,6 +25,12 @@ export interface Rewrite {
 	hints: Hint[];
 }
 
+/** A term the glossary already knows; plain mentions of it get numbered too. */
+export interface KnownTerm {
+	term: string;
+	definition?: string;
+}
+
 const SUPERSCRIPT = ["", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
 export const MAX_HINTS = 9;
 
@@ -50,14 +56,39 @@ export function findMarkers(text: string): Marker[] {
 	return out;
 }
 
+// Spans the highlight pass must not touch: inline code, links, existing hints.
+const PROTECTED = /`[^`\n]*`|\*\*[^*\n]+\*\*[¹²³⁴⁵⁶⁷⁸⁹]?|\[[^\]\n]*\]\([^)\n]*\)|https?:\/\/\S+/g;
+
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** One regex matching any of the terms as whole words, longest first, with an optional plural s. */
+function termPattern(terms: string[]): RegExp | undefined {
+	const parts = [...new Set(terms.map(normalizeTerm).filter(Boolean))]
+		.sort((a, b) => b.length - a.length)
+		.map((t) => escapeRegExp(t).replace(/ /g, "\\s+"));
+	if (parts.length === 0) return undefined;
+	return new RegExp(`(?<![\\w-])(?:${parts.join("|")})(?:e?s)?(?![\\w-])`, "gi");
+}
+
 /**
  * Replace markers with bold terms carrying a superscript number. `startIndex`
  * lets several messages in the same turn continue the same numbering, and
  * `known` lets a term reuse its number when it shows up again.
+ *
+ * Afterwards every plain mention of a hinted term, or of a term in `glossary`,
+ * gets the same treatment, so a term is never numbered in one sentence and
+ * bare in the next. Code, links and existing hints are left alone.
  */
-export function rewrite(text: string, startIndex = 1, known: Map<string, Hint> = new Map()): Rewrite {
+export function rewrite(
+	text: string,
+	startIndex = 1,
+	known: Map<string, Hint> = new Map(),
+	glossary: KnownTerm[] = [],
+): Rewrite {
 	const hints: Hint[] = [];
 	let next = startIndex;
+	const byKey = new Map<string, KnownTerm>();
+	for (const g of glossary) byKey.set(normalizeTerm(g.term), g);
 
 	const transform = (chunk: string): string =>
 		chunk.replace(MARKER, (_whole, rawTerm: string, rawDef?: string) => {
@@ -77,16 +108,47 @@ export function rewrite(text: string, startIndex = 1, known: Map<string, Hint> =
 			return `**${term}**${superscript(hint.index)}`;
 		});
 
+	// Plain mentions of known or glossary terms, outside protected spans.
+	const highlight = (chunk: string): string => {
+		const pattern = termPattern([...known.keys(), ...byKey.keys()]);
+		if (!pattern) return chunk;
+		const mark = (plain: string): string =>
+			plain.replace(pattern, (word: string) => {
+				// Undo the plural we allowed so the lookup key matches.
+				const key = normalizeTerm(word);
+				const base =
+					[key, key.replace(/s$/, ""), key.replace(/es$/, "")].find((k) => known.has(k) || byKey.has(k)) ?? key;
+				let hint = known.get(base);
+				if (!hint) {
+					const g = byKey.get(base);
+					if (!g) return word;
+					if (next > MAX_HINTS) return `**${word}**`;
+					hint = { index: next++, term: g.term, definition: g.definition };
+					known.set(base, hint);
+					hints.push(hint);
+				}
+				return `**${word}**${superscript(hint.index)}`;
+			});
+		let out = "";
+		let last = 0;
+		for (const m of chunk.matchAll(PROTECTED)) {
+			out += mark(chunk.slice(last, m.index!));
+			out += m[0];
+			last = m.index! + m[0].length;
+		}
+		return out + mark(chunk.slice(last));
+	};
+
 	// Walk the text, leaving fenced blocks untouched.
 	let out = "";
 	let last = 0;
 	for (const fence of text.matchAll(FENCE)) {
 		const start = fence.index!;
-		out += transform(text.slice(last, start));
+		out += highlight(transform(text.slice(last, start)));
 		out += fence[0];
 		last = start + fence[0].length;
 	}
-	out += transform(text.slice(last));
+	out += highlight(transform(text.slice(last)));
 
 	return { text: out, hints };
 }

@@ -66,3 +66,34 @@ test("recoverHints reads numbers back out of rendered text", () => {
 test("plain bold without a superscript is not a hint", () => {
 	assert.deepEqual(recoverHints("**just bold** and **more**"), []);
 });
+
+test("every plain repeat of a marked term gets the same number", () => {
+	const r = rewrite("A [[closure|keeps its scope]] is handy. Closures are everywhere, and a closure is cheap.");
+	assert.equal(r.text, "A **closure**¹ is handy. **Closures**¹ are everywhere, and a **closure**¹ is cheap.");
+	assert.equal(r.hints.length, 1);
+});
+
+test("glossary terms mentioned without markers get numbered too", () => {
+	const r = rewrite("Guard it with a mutex, or you get a race condition.", 1, new Map(), [
+		{ term: "race condition", definition: "two threads racing" },
+		{ term: "mutex", definition: "a lock" },
+	]);
+	assert.equal(r.text, "Guard it with a **mutex**¹, or you get a **race condition**².");
+	assert.deepEqual(r.hints.map((h) => [h.index, h.term, h.definition]), [
+		[1, "mutex", "a lock"],
+		[2, "race condition", "two threads racing"],
+	]);
+});
+
+test("highlight pass skips inline code, links, urls and partial words", () => {
+	const r = rewrite("The [[cache|a fast copy]] helps. See `cache.ts`, [cache docs](https://x/cache), https://x/cache and cachedValue.");
+	assert.equal(
+		r.text,
+		"The **cache**¹ helps. See `cache.ts`, [cache docs](https://x/cache), https://x/cache and cachedValue.",
+	);
+});
+
+test("marker terms take the low numbers, glossary mentions follow", () => {
+	const r = rewrite("scope first, then [[closure|c]].", 1, new Map(), [{ term: "scope", definition: "s" }]);
+	assert.equal(r.text, "**scope**² first, then **closure**¹.");
+});
