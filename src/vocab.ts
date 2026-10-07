@@ -7,6 +7,7 @@
  *   /vocab         same as alt+w
  *   /vocab toggle  stop or resume asking the model to mark terms (on by default)
  *   /vocab forget <term>
+ *   /vocab quiz [n]  flashcards for the entries most likely to have slipped
  *
  * The model writes [[term|definition]] or [[kind: name|definition]] for a
  * concept, why, where, how or gotcha; message_end turns that into **name**¹ and
@@ -20,6 +21,7 @@ import { Glossary } from "./glossary.ts";
 import { type Hint, recoverHints, rewrite } from "./markers.ts";
 import { KIND_LABEL, type OverlayResult, VocabOverlay } from "./overlay.ts";
 import { PROMPT_SECTION } from "./prompt.ts";
+import { pickCards, QuizOverlay, type QuizResult } from "./quiz.ts";
 
 // PI_VOCAB_FILE overrides the location, mostly for tests.
 const GLOSSARY_FILE = process.env.PI_VOCAB_FILE || join(getAgentDir(), "vocab.json");
@@ -73,6 +75,25 @@ export default function (pi: ExtensionAPI) {
 				`Explain [[${kind === "term" ? "" : `${kind}: `}${term}]] again${label}. Plain words, under 80 words, one concrete example from this project. Keep the [[...]] marker so it keeps its number.`,
 			);
 		}
+	};
+
+	/** Five flashcards from the entries most likely to have slipped. */
+	const runQuiz = async (ctx: ExtensionContext, n: number) => {
+		if (!ctx.hasUI || overlayOpen) return;
+		const cards = pickCards(glossary.all(ctx.cwd), n);
+		overlayOpen = true;
+		let result: QuizResult | undefined;
+		try {
+			result = await ctx.ui.custom<QuizResult>((_tui, theme, _keys, done) => new QuizOverlay(theme, cards, done), {
+				overlay: true,
+				overlayOptions: { width: "80%", maxHeight: "80%", anchor: "center", minWidth: 40 },
+			});
+		} finally {
+			overlayOpen = false;
+		}
+		if (!result || result.asked.length === 0) return;
+		for (const e of result.asked) glossary.recordQuiz(e, result.missed.includes(e));
+		glossary.save();
 	};
 
 	// On resume, find the last assistant reply and read its hint numbers back.
@@ -150,7 +171,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("vocab", {
-		description: "Glossary of terms the agent explained. /vocab toggle, /vocab forget <term>",
+		description: "Glossary of terms the agent explained. /vocab quiz [n] | toggle | forget <term>",
 		handler: async (args, ctx) => {
 			const [sub, ...rest] = args.trim().split(/\s+/).filter(Boolean);
 			if (sub === "toggle" || sub === "on" || sub === "off") {
@@ -167,6 +188,10 @@ export default function (pi: ExtensionAPI) {
 				hints = hints.filter((h) => h.term.toLowerCase() !== term.toLowerCase());
 				showStatus(ctx);
 				return;
+			}
+			if (sub === "quiz") {
+				const n = Number.parseInt(rest[0] ?? "", 10);
+				return runQuiz(ctx, Number.isFinite(n) && n > 0 ? Math.min(n, 20) : 5);
 			}
 			if (sub === "count") return ctx.ui.notify(`${glossary.size} terms in ${GLOSSARY_FILE}`, "info");
 			await openOverlay(ctx, sub ? [sub, ...rest].join(" ") : undefined);

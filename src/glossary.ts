@@ -34,6 +34,8 @@ export interface Entry {
 	related: string[];
 	/** How often the user opened this entry in the overlay. High means not sticking. */
 	lookups: number;
+	/** Flashcard history. */
+	quiz: { asked: number; missed: number; lastAsked?: string };
 }
 
 export interface GlossaryFile {
@@ -71,6 +73,11 @@ export class Glossary {
 					kind: entry.kind && isKind(entry.kind) ? entry.kind : "term",
 					related: Array.isArray(entry.related) ? entry.related : [],
 					lookups: typeof entry.lookups === "number" ? entry.lookups : 0,
+					quiz: {
+						asked: entry.quiz?.asked ?? 0,
+						missed: entry.quiz?.missed ?? 0,
+						...(entry.quiz?.lastAsked ? { lastAsked: entry.quiz.lastAsked } : {}),
+					},
 				} as Entry;
 			}
 			return { version: 2, enabled: parsed.enabled !== false, terms };
@@ -138,6 +145,7 @@ export class Glossary {
 			projects: [project],
 			related: [],
 			lookups: 0,
+			quiz: { asked: 0, missed: 0 },
 		};
 		this.data.terms[key] = entry;
 		this.link(entry, related);
@@ -160,6 +168,13 @@ export class Glossary {
 		if (!entry) return false;
 		entry.lookups += 1;
 		return true;
+	}
+
+	/** Record a flashcard answer. */
+	recordQuiz(entry: Entry, missed: boolean, now = new Date()): void {
+		entry.quiz.asked += 1;
+		if (missed) entry.quiz.missed += 1;
+		entry.quiz.lastAsked = now.toISOString();
 	}
 
 	/** Remove an entry. Without a kind, removes every kind with that name. */
