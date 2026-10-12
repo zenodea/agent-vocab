@@ -169,3 +169,11 @@ test("styled hints are recovered and protected from re-marking", () => {
 	const again = rewrite(r.text, { glossary: [{ kind: "gotcha", term: "seeding", definition: "x" }] });
 	assert.equal(again.text, r.text);
 });
+
+test("without ansi the project kinds stay plain bold and concepts keep their italics", () => {
+	const r = rewrite("[[gotcha: seeding|run migrations first]] and [[concept: closure|it keeps scope]] and [[how: test|make test]]", {
+		ansi: false,
+	});
+	assert.equal(r.text, "**seeding**¹ and ***closure***² and **test**³");
+	assert.equal(r.text, stripAnsi(r.text));
+});

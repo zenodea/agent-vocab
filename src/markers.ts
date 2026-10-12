@@ -69,8 +69,12 @@ export const stripAnsi = (s: string): string => s.replace(ANSI, "");
  *   concept  ***name***            bold italic
  *   why/where/how  **name** underlined
  *   gotcha   **name** curly underline
+ *
+ * Without `ansi` (hosts that refuse control characters in reply text) the
+ * underlined kinds fall back to plain bold.
  */
-export function styleName(kind: Kind, name: string): string {
+export function styleName(kind: Kind, name: string, ansi = true): string {
+	if (!ansi && kind !== "concept") return `**${name}**`;
 	switch (kind) {
 		case "concept":
 			return `***${name}***`;
@@ -160,6 +164,8 @@ export interface RewriteOptions {
 	 * its bold name once the name is complete, and hidden before that.
 	 */
 	streaming?: boolean;
+	/** Underline the project kinds with raw ANSI. On by default. */
+	ansi?: boolean;
 }
 
 /**
@@ -175,6 +181,7 @@ export interface RewriteOptions {
  */
 export function rewrite(text: string, options: RewriteOptions = {}): Rewrite {
 	const known = options.known ?? new Map<string, Hint>();
+	const ansi = options.ansi ?? true;
 	const hints: Hint[] = [];
 	let next = 1;
 	for (const h of known.values()) if (h.index >= next) next = h.index + 1;
@@ -187,7 +194,7 @@ export function rewrite(text: string, options: RewriteOptions = {}): Rewrite {
 			const name = open[2]?.trim();
 			// Name complete once the "|" has arrived; before that show nothing.
 			const kind = open[1] && isKind(open[1]) ? open[1] : "term";
-			tail = open[3] !== undefined && name ? styleName(kind, name) : "";
+			tail = open[3] !== undefined && name ? styleName(kind, name, ansi) : "";
 			text = text.slice(0, open.index);
 		}
 	}
@@ -217,7 +224,7 @@ export function rewrite(text: string, options: RewriteOptions = {}): Rewrite {
 				if (!hint.definition && marker.definition) hint.definition = marker.definition;
 				if (marker.related) hint.related = [...new Set([...(hint.related ?? []), ...marker.related])];
 			}
-			return `${styleName(hint.kind, marker.term)}${superscript(hint.index)}`;
+			return `${styleName(hint.kind, marker.term, ansi)}${superscript(hint.index)}`;
 		});
 
 	// Plain mentions of known or glossary names, outside protected spans.
@@ -236,7 +243,7 @@ export function rewrite(text: string, options: RewriteOptions = {}): Rewrite {
 					if (!g) return word;
 					hint = add(base, g.kind, g.term, g.definition);
 				}
-				return `${styleName(hint.kind, word)}${superscript(hint.index)}`;
+				return `${styleName(hint.kind, word, ansi)}${superscript(hint.index)}`;
 			});
 		let out = "";
 		let last = 0;

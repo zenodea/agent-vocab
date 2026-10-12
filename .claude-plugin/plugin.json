@@ -1,0 +1,6 @@
+{
+	"name": "vocab",
+	"version": "0.1.0",
+	"description": "Numbered jargon hints in Claude Code replies, with a glossary pane and flashcards",
+	"types": "./types/index.d.ts"
+}
